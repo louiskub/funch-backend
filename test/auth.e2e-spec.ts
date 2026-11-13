@@ -23,7 +23,7 @@ function userRecord(body: unknown): Record<string, unknown> {
   if (typeof user !== 'object' || user === null || Array.isArray(user)) {
     throw new Error('API response user is invalid');
   }
-  return user;
+  return Object.fromEntries(Object.entries(user));
 }
 
 function userId(body: unknown): string {

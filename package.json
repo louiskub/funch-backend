@@ -15,6 +15,7 @@
     "db:migrate": "node scripts/db.cjs migrate",
     "db:seed": "node scripts/db.cjs seed",
     "db:setup": "node scripts/db.cjs setup",
+    "admin:provision": "npm run build && node scripts/provision-admin.cjs",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\"",
     "test": "jest",
     "test:watch": "jest --watch",

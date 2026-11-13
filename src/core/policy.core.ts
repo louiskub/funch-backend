@@ -71,6 +71,7 @@ export interface CanAssignCarInput {
   car: {
     carTypeBranchId: string;
     isOperational: boolean;
+    isOutOnRent: boolean;
     readyAt: IsoInstant;
   };
   now: IsoInstant;

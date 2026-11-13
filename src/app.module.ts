@@ -9,10 +9,17 @@ import { AuthService } from './auth.service';
 import { PasswordService } from './password.service';
 import { SessionGuard, RolesGuard } from './auth.guards';
 import { StateChangeOriginGuard } from './auth-origin.guard';
+import { AdminFleetController } from './admin-fleet.controller';
+import { AdminFleetService } from './admin-fleet.service';
 
 @Module({
   imports: [],
-  controllers: [AppController, CatalogController, AuthController],
+  controllers: [
+    AppController,
+    CatalogController,
+    AuthController,
+    AdminFleetController,
+  ],
   providers: [
     AppService,
     DatabaseService,
@@ -22,6 +29,7 @@ import { StateChangeOriginGuard } from './auth-origin.guard';
     SessionGuard,
     RolesGuard,
     StateChangeOriginGuard,
+    AdminFleetService,
   ],
 })
 export class AppModule {}

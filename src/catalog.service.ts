@@ -35,7 +35,7 @@ export class CatalogService {
 
   async offers(branchId: string) {
     const { rows } = await this.db.query(
-      `SELECT o.id, t.id AS "carTypeId", t.brand, t.model, t.seats, t.transmission, t.fuel_type AS "fuelType",
+      `SELECT o.id, o.branch_id AS "branchId", t.id AS "carTypeId", t.brand, t.model, t.seats, t.transmission, t.fuel_type AS "fuelType",
               t.features, t.image_file_ids AS "imageFileIds", o.base_hourly_rate::text AS "baseHourlyRate",
               o.base_daily_rate::text AS "baseDailyRate", o.currency_code AS "currencyCode",
               b.name AS "branchName", b.city, b.timezone, c.code AS "countryCode"
@@ -52,10 +52,10 @@ export class CatalogService {
 
   async offer(offerId: string) {
     const { rows } = await this.db.query(
-      `SELECT o.id, t.id AS "carTypeId", t.brand, t.model, t.seats, t.transmission, t.fuel_type AS "fuelType",
+      `SELECT o.id, o.branch_id AS "branchId", t.id AS "carTypeId", t.brand, t.model, t.seats, t.transmission, t.fuel_type AS "fuelType",
               t.features, t.image_file_ids AS "imageFileIds", o.base_hourly_rate::text AS "baseHourlyRate",
               o.base_daily_rate::text AS "baseDailyRate", o.currency_code AS "currencyCode",
-              b.id AS "branchId", b.name AS "branchName", b.city, b.timezone, c.code AS "countryCode"
+              b.name AS "branchName", b.city, b.timezone, c.code AS "countryCode"
        FROM car_type_branch o
        JOIN branch b ON b.id = o.branch_id AND b.is_active
        JOIN country c ON c.id = b.country_id

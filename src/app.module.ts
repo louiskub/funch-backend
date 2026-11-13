@@ -11,6 +11,8 @@ import { SessionGuard, RolesGuard } from './auth.guards';
 import { StateChangeOriginGuard } from './auth-origin.guard';
 import { OptionsController } from './options.controller';
 import { OptionsService } from './options.service';
+import { AdminFleetController } from './admin-fleet.controller';
+import { AdminFleetService } from './admin-fleet.service';
 
 @Module({
   imports: [],
@@ -19,6 +21,7 @@ import { OptionsService } from './options.service';
     CatalogController,
     AuthController,
     OptionsController,
+    AdminFleetController,
   ],
   providers: [
     AppService,
@@ -30,6 +33,7 @@ import { OptionsService } from './options.service';
     RolesGuard,
     StateChangeOriginGuard,
     OptionsService,
+    AdminFleetService,
   ],
 })
 export class AppModule {}

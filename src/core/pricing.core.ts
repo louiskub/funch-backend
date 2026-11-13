@@ -81,13 +81,21 @@ export interface CalculateLateReturnChargesInput {
   options: LateReturnOptionSnapshot[];
 }
 
-export interface AdditionalChargeLine {
-  kind: 'EXTRA_RENTAL' | 'EXTRA_OPTION';
-  bookingOptionId: string | null;
-  quantity: number;
-  unitPrice: Money;
-  amount: Money;
-}
+export type AdditionalChargeLine =
+  | {
+      kind: 'EXTRA_RENTAL';
+      bookingOptionId: null;
+      quantity: number;
+      unitPrice: Money;
+      amount: Money;
+    }
+  | {
+      kind: 'EXTRA_OPTION';
+      bookingOptionId: string;
+      quantity: number;
+      unitPrice: Money;
+      amount: Money;
+    };
 
 export function calculateLateReturnCharges(
   input: CalculateLateReturnChargesInput,

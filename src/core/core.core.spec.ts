@@ -85,6 +85,7 @@ describe('core business stubs', () => {
         car: {
           carTypeBranchId: 'offer-1',
           isOperational: true,
+          isOutOnRent: false,
           readyAt: '2026-11-15T09:00:00+07:00',
         },
         now: '2026-11-15T10:00:00+07:00',

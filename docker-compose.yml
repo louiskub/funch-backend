@@ -1,0 +1,95 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: car-rental-postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - car-rental-postgres-data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: car-rental
+      POSTGRES_USER: car-rental
+      POSTGRES_PASSWORD: car-rental
+      TZ: UTC
+      PGTZ: UTC
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U car-rental -d car-rental"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    container_name: car-rental-minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: car-rental
+      MINIO_ROOT_PASSWORD: car-rental
+    volumes:
+      - car-rental-minio-data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+    restart: "no"
+
+  minio-init:
+    image: minio/mc:latest
+    container_name: uniassess-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    volumes:
+      - ./apps/api/src/data/template:/templates:ro
+    entrypoint: |
+      /bin/sh -c '
+        until mc alias set local http://minio:9000 uniassess uniassess; do
+          echo "Waiting for MinIO..."
+          sleep 1
+        done
+
+        mc mb -p local/uniassess-bucket || true;
+
+        mc anonymous set none local/uniassess-bucket;
+
+        printf "%s\n" \
+          "{" \
+          "  \"Version\": \"2012-10-17\"," \
+          "  \"Statement\": [" \
+          "    {" \
+          "      \"Effect\": \"Allow\"," \
+          "      \"Principal\": \"*\"," \
+          "      \"Action\": [\"s3:GetObject\"]," \
+          "      \"Resource\": [\"arn:aws:s3:::uniassess-bucket/public/*\"]" \
+          "    }" \
+          "  ]" \
+          "}" > /tmp/public-policy.json;
+
+        cat /tmp/public-policy.json;
+
+        mc anonymous set-json /tmp/public-policy.json local/uniassess-bucket;
+
+        touch /tmp/.gitkeep;
+        mc cp /tmp/.gitkeep local/uniassess-bucket/public/.gitkeep || true;
+        mc cp /tmp/.gitkeep local/uniassess-bucket/private/.gitkeep || true;
+
+        for template in /templates/*.csv /templates/*.xls; do
+          [ -f "$$template" ] || continue;
+          mc cp "$$template" local/uniassess-bucket/public/template/;
+        done
+
+        echo "MinIO bucket uniassess-bucket created.";
+        echo "CSV and XLS templates seeded under public/template/.";
+        echo "public/* is readable by static URL.";
+        echo "private/* is not public and should use presigned URL.";
+      '
+    restart: "no"
+
+volumes:
+  car-rental-postgres-data:
+  car-rental-minio-data:

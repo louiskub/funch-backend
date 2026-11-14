@@ -1,0 +1,234 @@
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  InternalServerErrorException,
+  NotFoundException,
+} from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
+import type { PoolClient, QueryResultRow } from 'pg';
+import { DatabaseService } from './database.service';
+import { StorageService } from './storage.service';
+import sharp from 'sharp';
+
+export const maxFileBytes = 10 * 1024 * 1024;
+const raster = [
+  { mime: 'image/jpeg', ext: 'jpg', starts: [0xff, 0xd8, 0xff] },
+  {
+    mime: 'image/png',
+    ext: 'png',
+    starts: [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a],
+  },
+  { mime: 'image/gif', ext: 'gif', starts: [0x47, 0x49, 0x46, 0x38] },
+] as const;
+
+export function imageType(bytes: Buffer): { mime: string; ext: string } {
+  const match = raster.find(({ starts }) =>
+    starts.every((byte, index) => bytes[index] === byte),
+  );
+  if (match) return match;
+  if (
+    bytes.length >= 12 &&
+    bytes.toString('ascii', 0, 4) === 'RIFF' &&
+    bytes.toString('ascii', 8, 12) === 'WEBP'
+  )
+    return { mime: 'image/webp', ext: 'webp' };
+  throw new BadRequestException(
+    'Upload must contain a JPEG, PNG, GIF, or WebP image',
+  );
+}
+
+type FileAssetRow = QueryResultRow & {
+  id: string;
+  originalName: string;
+  mimeType: string;
+  sizeBytes: string | number;
+  visibility: string;
+  objectKey: string;
+};
+
+function asset(row: FileAssetRow, storage: StorageService) {
+  return {
+    id: row.id,
+    originalName: row.originalName,
+    mimeType: row.mimeType,
+    sizeBytes: Number(row.sizeBytes),
+    visibility: row.visibility,
+    ...(row.visibility === 'PUBLIC'
+      ? { url: storage.publicUrl(row.objectKey) }
+      : {}),
+  };
+}
+
+@Injectable()
+export class FilesService {
+  constructor(
+    private readonly db: DatabaseService,
+    private readonly storage: StorageService,
+  ) {}
+
+  async upload(
+    file: Express.Multer.File | undefined,
+    userId: string,
+    visibility: 'PUBLIC' | 'PRIVATE',
+  ) {
+    if (!file?.buffer?.length || file.buffer.length > maxFileBytes)
+      throw new BadRequestException('Image must be between 1 byte and 10 MB');
+    const type = imageType(file.buffer);
+    try {
+      const image = sharp(file.buffer, { limitInputPixels: 40_000_000 });
+      const metadata = await image.metadata();
+      if (metadata.format !== (type.ext === 'jpg' ? 'jpeg' : type.ext))
+        throw new BadRequestException(
+          'Image content does not match its file signature',
+        );
+      await image.stats();
+    } catch (error) {
+      if (error instanceof BadRequestException) throw error;
+      throw new BadRequestException(
+        'Upload is not a complete, decodable image',
+      );
+    }
+    const id = randomUUID();
+    const key = `${visibility === 'PUBLIC' ? 'public' : 'private'}/${id}.${type.ext}`;
+    try {
+      await this.storage.put(key, file.buffer, type.mime);
+    } catch (error) {
+      try {
+        await this.storage.remove(key);
+      } catch (cleanupError) {
+        throw new InternalServerErrorException(
+          'Object upload and immediate cleanup failed; run orphan cleanup',
+          { cause: new AggregateError([error, cleanupError]) },
+        );
+      }
+      throw error;
+    }
+    try {
+      const { rows } = await this.db.query<FileAssetRow>(
+        `INSERT INTO file_asset (id, object_key, original_name, mime_type, size_bytes, visibility, uploaded_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)
+         RETURNING id, original_name AS "originalName", mime_type AS "mimeType", size_bytes AS "sizeBytes", visibility, object_key AS "objectKey"`,
+        [
+          id,
+          key,
+          file.originalname.replace(/^.*[\\/]/, '').slice(0, 255) || 'image',
+          type.mime,
+          file.buffer.length,
+          visibility,
+          userId,
+        ],
+      );
+      return asset(rows[0], this.storage);
+    } catch (error) {
+      try {
+        await this.storage.remove(key);
+      } catch (cleanupError) {
+        throw new InternalServerErrorException(
+          'Upload metadata and immediate cleanup failed; run orphan cleanup',
+          { cause: new AggregateError([error, cleanupError]) },
+        );
+      }
+      throw error;
+    }
+  }
+
+  async listPublic() {
+    const { rows } = await this.db.query<FileAssetRow>(
+      `SELECT id, original_name AS "originalName", mime_type AS "mimeType", size_bytes AS "sizeBytes", visibility, object_key AS "objectKey"
+       FROM file_asset WHERE visibility = 'PUBLIC' ORDER BY created_at DESC`,
+    );
+    return rows.map((row) => asset(row, this.storage));
+  }
+
+  async signedGet(id: string) {
+    const { rows } = await this.db.query<
+      { objectKey: string; visibility: string } & QueryResultRow
+    >(
+      'SELECT object_key AS "objectKey", visibility FROM file_asset WHERE id = $1',
+      [id],
+    );
+    const file = rows[0];
+    if (!file) throw new NotFoundException('File not found');
+    if (file.visibility !== 'PRIVATE')
+      throw new BadRequestException('Only private files use signed downloads');
+    return {
+      url: await this.storage.presignedGet(file.objectKey),
+      expiresAt: new Date(Date.now() + 300_000).toISOString(),
+    };
+  }
+
+  async delete(id: string) {
+    const file = await this.db.transaction(async (client) => {
+      const { rows } = await client.query<
+        { objectKey: string } & QueryResultRow
+      >(
+        'SELECT object_key AS "objectKey" FROM file_asset WHERE id = $1 FOR UPDATE',
+        [id],
+      );
+      if (!rows[0]) throw new NotFoundException('File not found');
+      const { rows: references } = await client.query(
+        'SELECT 1 FROM car_type WHERE image_file_ids @> ARRAY[$1::uuid] LIMIT 1',
+        [id],
+      );
+      if (references.length)
+        throw new ConflictException(
+          'Remove this image from every gallery before deleting it',
+        );
+      await client.query('DELETE FROM file_asset WHERE id = $1', [id]);
+      return rows[0];
+    });
+    try {
+      await this.storage.remove(file.objectKey);
+    } catch (error) {
+      throw new InternalServerErrorException(
+        'File metadata was deleted; run orphan cleanup to retry',
+        { cause: error },
+      );
+    }
+    return { deleted: true };
+  }
+
+  async setGallery(carTypeId: string, ids: string[]) {
+    if (new Set(ids).size !== ids.length)
+      throw new BadRequestException('Gallery image IDs must be unique');
+    return this.db.transaction(async (client: PoolClient) => {
+      const { rows: types } = await client.query<
+        { imageFileIds: string[] } & QueryResultRow
+      >(
+        'SELECT image_file_ids AS "imageFileIds" FROM car_type WHERE id = $1 FOR UPDATE',
+        [carTypeId],
+      );
+      if (!types[0]) throw new NotFoundException('Car type not found');
+      const lockedIds = [...new Set([...types[0].imageFileIds, ...ids])].sort();
+      if (lockedIds.length) {
+        const { rows: files } = await client.query<
+          { id: string; visibility: string; mimeType: string } & QueryResultRow
+        >(
+          `SELECT id, visibility, mime_type AS "mimeType" FROM file_asset WHERE id = ANY($1::uuid[]) ORDER BY id FOR UPDATE`,
+          [lockedIds],
+        );
+        if (files.length !== lockedIds.length)
+          throw new BadRequestException('Gallery contains an unknown image');
+        if (
+          files.some(
+            (file) =>
+              file.visibility !== 'PUBLIC' ||
+              !file.mimeType.startsWith('image/'),
+          )
+        )
+          throw new BadRequestException(
+            'Only public images can be added to a gallery',
+          );
+      }
+      const { rows } = await client.query<
+        { id: string; imageFileIds: string[] } & QueryResultRow
+      >(
+        `UPDATE car_type SET image_file_ids = $2::uuid[], updated_at = now() WHERE id = $1
+         RETURNING id, image_file_ids AS "imageFileIds"`,
+        [carTypeId, ids],
+      );
+      return rows[0];
+    });
+  }
+}

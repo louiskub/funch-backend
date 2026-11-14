@@ -95,3 +95,9 @@ FILES_TEST_DATABASE_URL=postgres://car-rental:car-rental@localhost:15432/funch_t
 FILES_TEST_BUCKET=funch-assets-ticket05-test \
 npm run test:e2e -- --runInBand
 ```
+
+## Production dependency audit
+
+As of 2026-11-14, `npm audit --omit=dev` reports four package findings through MinIO 8.0.7: `query-string@7.1.3` resolves `decode-uri-component@0.2.2` (including [GHSA-qr28-fpjm-wq7f](https://github.com/advisories/GHSA-qr28-fpjm-wq7f)), and MinIO also includes `stream-json@1.9.1` (including [GHSA-528h-pc64-c93x](https://github.com/advisories/GHSA-528h-pc64-c93x), [GHSA-hqr4-qq8f-hg3x](https://github.com/advisories/GHSA-hqr4-qq8f-hg3x), and [GHSA-mjw6-4jj6-33hc](https://github.com/uhop/stream-json/security/advisories/GHSA-mjw6-4jj6-33hc)). The registry currently lists 8.0.7 as the latest MinIO release, and it still declares both dependency ranges. npm's suggested MinIO 7.1.3 major downgrade still depends on `query-string@7`; it does not resolve the decoder finding. The patched decoder and stream-json releases are ESM packages while these MinIO/query-string call sites load through CommonJS. This project does not apply those cross-major overrides or the SDK downgrade without a supported upstream release and MinIO integration coverage.
+
+The affected parser paths are not called by the app today: MinIO uses `query-string.stringify` for its request and signing parameters, not `parse`; its streaming JSON parser is used by bucket notification listeners. The app only uses MinIO object upload, removal, presigned download, and orphan listing, and does not configure or call bucket notifications. Keep the audit finding visible and recheck it when upgrading MinIO or adding notification handling; this reachability assessment does not make `npm audit` clean.

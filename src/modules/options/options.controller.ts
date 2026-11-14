@@ -7,7 +7,6 @@ import {
   Post,
   UseGuards,
 } from '@nestjs/common';
-import { ApiCookieAuth } from '@nestjs/swagger';
 import { Roles } from '../auth/decorators/auth.decorators';
 import { RoleGuard } from '../auth/guards/role.guard';
 import { SessionAuthGuard } from '../auth/guards/session-auth.guard';
@@ -30,7 +29,6 @@ export class OptionsController {
   }
 
   @Get('admin/options/branches')
-  @ApiCookieAuth()
   @UseGuards(SessionAuthGuard, RoleGuard)
   @Roles(UserRole.ADMIN)
   branches() {
@@ -38,7 +36,6 @@ export class OptionsController {
   }
 
   @Get('admin/options/branches/:branchId')
-  @ApiCookieAuth()
   @UseGuards(SessionAuthGuard, RoleGuard)
   @Roles(UserRole.ADMIN)
   adminOptions(@Param() { branchId }: BranchOptionParams) {
@@ -46,7 +43,6 @@ export class OptionsController {
   }
 
   @Post('admin/options')
-  @ApiCookieAuth()
   @UseGuards(SessionAuthGuard, RoleGuard)
   @Roles(UserRole.ADMIN)
   create(@Body() input: CreateOptionDto) {
@@ -54,7 +50,6 @@ export class OptionsController {
   }
 
   @Patch('admin/options/:optionId')
-  @ApiCookieAuth()
   @UseGuards(SessionAuthGuard, RoleGuard)
   @Roles(UserRole.ADMIN)
   update(

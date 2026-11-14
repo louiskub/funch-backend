@@ -14,7 +14,7 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { ApiBody, ApiConsumes, ApiCookieAuth, ApiQuery } from '@nestjs/swagger';
+import { ApiBody, ApiConsumes, ApiQuery } from '@nestjs/swagger';
 import { memoryStorage } from 'multer';
 import type { Response } from 'express';
 import { Roles } from '../auth/decorators/auth.decorators';
@@ -26,7 +26,6 @@ import { FilesService, maxFileBytes } from './files.service';
 import { FileIdParams, GalleryDto } from './dto/files.dto';
 
 @Controller('admin')
-@ApiCookieAuth()
 @UseGuards(SessionAuthGuard, RoleGuard)
 @Roles(UserRole.ADMIN)
 export class FilesController {

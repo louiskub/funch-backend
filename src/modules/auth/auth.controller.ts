@@ -73,14 +73,12 @@ export class AuthController {
   }
 
   @Get('me')
-  @ApiCookieAuth()
   @UseGuards(SessionAuthGuard)
   me(@Req() request: AuthenticatedRequest) {
     return { user: request.authUser };
   }
 
   @Patch('me')
-  @ApiCookieAuth()
   @UseGuards(SessionAuthGuard)
   async updateProfile(
     @Req() request: AuthenticatedRequest,

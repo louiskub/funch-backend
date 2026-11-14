@@ -10,7 +10,7 @@ npm run db:setup
 npm run start:dev
 ```
 
-The compose project uses host port `15432` and a project-scoped volume. The `.env` file is loaded by the start, database, and admin-provision scripts; values already exported in the process take precedence. `db:setup` applies the checked-in catalog schema and repeatable demo seed. `db:migrate` and `db:seed` can be run separately. Configure `DATABASE_URL` for another database; the default local value is `postgres://car-rental:car-rental@localhost:15432/car-rental`.
+The compose project uses host port `15432` and a project-scoped volume. The `.env` file is loaded by the start, database, and admin-provision scripts; values already exported in the process take precedence. `db:setup` applies the timestamped TypeORM migrations and repeatable TypeScript seed. `db:migrate` and `db:seed` can be run separately. Configure `DATABASE_URL` for another database and set `DATABASE_SSL=true` when the server requires TLS; the default local URL is `postgres://car-rental:car-rental@localhost:15432/car-rental`.
 
 Start only this project's isolated MinIO services (the command does not start or modify PostgreSQL):
 
@@ -32,7 +32,7 @@ npm run files:cleanup-orphans
 
 ## Public catalog API
 
-- `GET /api/health` → `{ "status": "ok" }`
+- `GET /api/health` → `{ "status": { "code": 200, "messages": "OK" }, "data": { "status": "ok" } }`
 - `GET /api/countries` → countries that have at least one active branch and active car offer
 - `GET /api/countries/:countryCode/branches` → active branches in that country with an active offer
 - `GET /api/branches/:branchId/offers` → active offers at that branch

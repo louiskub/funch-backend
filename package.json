@@ -15,11 +15,11 @@
     "start:dev": "node --env-file-if-exists=.env ./node_modules/@nestjs/cli/bin/nest.js start --watch",
     "start:debug": "node --env-file-if-exists=.env ./node_modules/@nestjs/cli/bin/nest.js start --debug --watch",
     "start:prod": "node --env-file-if-exists=.env dist/main",
-    "db:migrate": "node --env-file-if-exists=.env scripts/db.cjs migrate",
-    "db:seed": "node --env-file-if-exists=.env scripts/db.cjs seed",
-    "db:setup": "node --env-file-if-exists=.env scripts/db.cjs setup",
+    "db:migrate": "node --env-file-if-exists=.env -r ts-node/register scripts/migrate.ts",
+    "db:seed": "node --env-file-if-exists=.env -r ts-node/register scripts/seed.ts",
+    "db:setup": "npm run db:migrate && npm run db:seed",
     "admin:provision": "npm run build && node --env-file-if-exists=.env scripts/provision-admin.cjs",
-    "files:cleanup-orphans": "node --env-file-if-exists=.env scripts/cleanup-orphan-assets.cjs",
+    "files:cleanup-orphans": "npm run build && node --env-file-if-exists=.env scripts/cleanup-orphan-assets.cjs",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\"",
     "test": "jest",
     "test:watch": "jest --watch",
@@ -37,7 +37,8 @@
     "pg": "^8.23.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
-    "sharp": "^0.35.5"
+    "sharp": "^0.35.5",
+    "typeorm": "^0.3.31"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.2.0",

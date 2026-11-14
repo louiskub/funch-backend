@@ -4,12 +4,12 @@ import { randomUUID } from 'node:crypto';
 import { Readable } from 'node:stream';
 import { Client as MinioClient } from 'minio';
 import { Pool } from 'pg';
+import { DataSource } from 'typeorm';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { AppModule } from '../src/app.module';
-import { DatabaseService } from '../src/database.service';
-import { FilesService } from '../src/files.service';
-import { StorageService } from '../src/storage.service';
+import { FilesService } from '../src/modules/files/files.service';
+import { StorageService } from '../src/platform/storage/storage.service';
 import { cleanOrphans } from '../scripts/cleanup-orphan-assets.cjs';
 
 const origin = 'http://localhost:3000';
@@ -39,7 +39,7 @@ describe('File assets and car type galleries (real PostgreSQL and MinIO)', () =>
   let typeIds: string[] = [];
   let minio: MinioClient;
   let storage: StorageService;
-  let database: DatabaseService;
+  let database: DataSource;
   const databaseUrl = process.env.FILES_TEST_DATABASE_URL;
   const bucket = process.env.FILES_TEST_BUCKET ?? 'funch-assets-ticket05-test';
 
@@ -67,7 +67,7 @@ describe('File assets and car type galleries (real PostgreSQL and MinIO)', () =>
     app.enableCors({ origin, credentials: true });
     await app.init();
     storage = app.get(StorageService);
-    database = app.get(DatabaseService);
+    database = app.get(DataSource);
     minio = storage.client;
   });
 
@@ -84,7 +84,7 @@ describe('File assets and car type galleries (real PostgreSQL and MinIO)', () =>
       })
       .expect(201);
     adminCookie = admin.headers['set-cookie'][0].split(';')[0];
-    const adminBody = record(admin.body);
+    const adminBody = record(admin.body.data);
     adminId = string(record(adminBody.user).id);
     await db.query("UPDATE app_user SET role = 'ADMIN' WHERE id = $1", [
       adminId,
@@ -124,7 +124,7 @@ describe('File assets and car type galleries (real PostgreSQL and MinIO)', () =>
       .set('Origin', origin)
       .attach('file', bytes, { filename, contentType: 'image/png' })
       .expect(201);
-    const id = string(record(response.body).id);
+    const id = string(record(response.body.data).id);
     const rows = await db.query<{ object_key: string }>(
       'SELECT object_key FROM file_asset WHERE id = $1',
       [id],
@@ -231,7 +231,7 @@ describe('File assets and car type galleries (real PostgreSQL and MinIO)', () =>
       .set('Cookie', adminCookie)
       .expect(200)
       .expect('Cache-Control', 'no-store');
-    const signedBody = record(signed.body);
+    const signedBody = record(signed.body.data);
     const signedUrl = string(signedBody.url);
     expect(new URL(signedUrl).searchParams.get('X-Amz-Expires')).toBe('300');
     expect((await fetch(signedUrl)).status).toBe(200);
@@ -288,7 +288,7 @@ describe('File assets and car type galleries (real PostgreSQL and MinIO)', () =>
     const offer = await request(app.getHttpServer())
       .get(`/api/offers/${offerId}`)
       .expect(200);
-    expect(record(offer.body).images).toMatchObject([
+    expect(record(offer.body.data).images).toMatchObject([
       { id: first.id },
       { id: second.id },
     ]);

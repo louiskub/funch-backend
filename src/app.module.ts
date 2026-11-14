@@ -1,45 +1,28 @@
 import { Module } from '@nestjs/common';
-import { AppController } from './app.controller';
-import { AppService } from './app.service';
-import { DatabaseService } from './database.service';
-import { CatalogController } from './catalog.controller';
-import { CatalogService } from './catalog.service';
-import { AuthController } from './auth.controller';
-import { AuthService } from './auth.service';
-import { PasswordService } from './password.service';
-import { SessionGuard, RolesGuard } from './auth.guards';
-import { StateChangeOriginGuard } from './auth-origin.guard';
-import { OptionsController } from './options.controller';
-import { OptionsService } from './options.service';
-import { AdminFleetController } from './admin-fleet.controller';
-import { AdminFleetService } from './admin-fleet.service';
-import { FilesController } from './files.controller';
-import { FilesService } from './files.service';
-import { StorageService } from './storage.service';
+import { APP_INTERCEPTOR } from '@nestjs/core';
+import { CommonModule } from './common/common.module';
+import { ResponseFormatInterceptor } from './common/interceptors/response-format.interceptor';
+import { AdminFleetModule } from './modules/admin-fleet/admin-fleet.module';
+import { AuthModule } from './modules/auth/auth.module';
+import { CatalogModule } from './modules/catalog/catalog.module';
+import { FilesModule } from './modules/files/files.module';
+import { HealthModule } from './platform/health/health.module';
+import { OptionsModule } from './modules/options/options.module';
+import { PlatformModule } from './platform/platform.module';
 
 @Module({
-  imports: [],
-  controllers: [
-    AppController,
-    CatalogController,
-    AuthController,
-    OptionsController,
-    AdminFleetController,
-    FilesController,
+  imports: [
+    CommonModule,
+    PlatformModule,
+    AuthModule,
+    CatalogModule,
+    OptionsModule,
+    AdminFleetModule,
+    FilesModule,
+    HealthModule,
   ],
   providers: [
-    AppService,
-    DatabaseService,
-    CatalogService,
-    AuthService,
-    PasswordService,
-    SessionGuard,
-    RolesGuard,
-    StateChangeOriginGuard,
-    OptionsService,
-    AdminFleetService,
-    FilesService,
-    StorageService,
+    { provide: APP_INTERCEPTOR, useClass: ResponseFormatInterceptor },
   ],
 })
 export class AppModule {}

@@ -92,7 +92,7 @@ describe('Authentication API (isolated PostgreSQL)', () => {
       .send(account('Customer@Example.com'))
       .set('Origin', frontendOrigin)
       .expect(201);
-    const user = userRecord(response.body);
+    const user = userRecord(response.body.data);
     expect(user).toMatchObject({
       email: 'customer@example.com',
       role: 'CUSTOMER',
@@ -168,17 +168,17 @@ describe('Authentication API (isolated PostgreSQL)', () => {
       .send({ email: 'ONE@example.com', password })
       .set('Origin', frontendOrigin)
       .expect(201);
-    expect(userId(login.body)).toBe(userId(first.body));
+    expect(userId(login.body.data)).toBe(userId(first.body.data));
     const firstProfile = await request(app.getHttpServer())
       .get('/api/auth/me')
       .set('Cookie', firstCookie)
       .expect(200);
-    expect(userId(firstProfile.body)).toBe(userId(first.body));
+    expect(userId(firstProfile.body.data)).toBe(userId(first.body.data));
     const secondProfile = await request(app.getHttpServer())
       .get('/api/auth/me')
       .set('Cookie', secondCookie)
       .expect(200);
-    expect(userId(secondProfile.body)).toBe(userId(second.body));
+    expect(userId(secondProfile.body.data)).toBe(userId(second.body.data));
     await request(app.getHttpServer())
       .patch('/api/auth/me')
       .set('Cookie', firstCookie)
@@ -187,7 +187,7 @@ describe('Authentication API (isolated PostgreSQL)', () => {
         name: 'Changed',
         email: 'changed@example.com',
         phone: '+66987654321',
-        id: userId(second.body),
+        id: userId(second.body.data),
       })
       .expect(400);
     await request(app.getHttpServer())
@@ -212,8 +212,8 @@ describe('Authentication API (isolated PostgreSQL)', () => {
         phone: '+66987654321',
       })
       .expect(200);
-    expect(userRecord(updated.body)).toMatchObject({
-      id: userId(first.body),
+    expect(userRecord(updated.body.data)).toMatchObject({
+      id: userId(first.body.data),
       name: 'Changed',
       email: 'changed@example.com',
       phone: '+66987654321',
@@ -265,7 +265,7 @@ describe('Authentication API (isolated PostgreSQL)', () => {
       "INSERT INTO user_session (token_hash, user_id, expires_at) VALUES ($1, $2, now() - interval '1 minute')",
       [
         createHash('sha256').update(expiredToken).digest('hex'),
-        userId(registered.body),
+        userId(registered.body.data),
       ],
     );
     await request(app.getHttpServer())
@@ -274,7 +274,7 @@ describe('Authentication API (isolated PostgreSQL)', () => {
       .expect(401);
 
     await db.query('UPDATE app_user SET is_suspended = true WHERE id = $1', [
-      userId(registered.body),
+      userId(registered.body.data),
     ]);
     await request(app.getHttpServer())
       .get('/api/auth/me')

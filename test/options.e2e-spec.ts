@@ -115,7 +115,7 @@ describe('Branch options API (isolated PostgreSQL)', () => {
     const publicOptions = await request(app.getHttpServer())
       .get(`/api/branches/${branchThailand}/options`)
       .expect(200);
-    expect(publicOptions.body).toEqual(
+    expect(publicOptions.body.data).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           code: 'GPS',
@@ -147,9 +147,9 @@ describe('Branch options API (isolated PostgreSQL)', () => {
     const remainingOptions = await request(app.getHttpServer())
       .get(`/api/branches/${branchThailand}/options`)
       .expect(200);
-    expect(JSON.parse(JSON.stringify(remainingOptions.body))).toMatchObject([
-      { code: 'DELIVERY' },
-    ]);
+    expect(
+      JSON.parse(JSON.stringify(remainingOptions.body.data)),
+    ).toMatchObject([{ code: 'DELIVERY' }]);
     await db.query('UPDATE branch SET is_active = false WHERE id = $1', [
       branchThailand,
     ]);

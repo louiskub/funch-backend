@@ -36,8 +36,8 @@ describe('Catalog API (PostgreSQL)', () => {
     const countries = await request(app.getHttpServer())
       .get('/api/countries')
       .expect(200);
-    expect(countries.body).toHaveLength(2);
-    expect(countries.body).toEqual(
+    expect(countries.body.data).toHaveLength(2);
+    expect(countries.body.data).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ code: 'TH' }),
         expect.objectContaining({ code: 'US' }),
@@ -47,13 +47,13 @@ describe('Catalog API (PostgreSQL)', () => {
     const thailand = await request(app.getHttpServer())
       .get('/api/countries/TH/branches')
       .expect(200);
-    expect(thailand.body).toMatchObject([
+    expect(thailand.body.data).toMatchObject([
       { code: 'BKK', timezone: 'Asia/Bangkok', currencyCode: 'THB' },
     ]);
     const us = await request(app.getHttpServer())
       .get('/api/countries/US/branches')
       .expect(200);
-    expect(us.body).toMatchObject([
+    expect(us.body.data).toMatchObject([
       { code: 'JFK', timezone: 'America/New_York', currencyCode: 'USD' },
     ]);
 
@@ -71,7 +71,7 @@ describe('Catalog API (PostgreSQL)', () => {
       const remainingCountries = await request(app.getHttpServer())
         .get('/api/countries')
         .expect(200);
-      expect(remainingCountries.body).toMatchObject([
+      expect(remainingCountries.body.data).toMatchObject([
         { code: 'US', currencyCode: 'USD' },
       ]);
       await request(app.getHttpServer())
@@ -89,7 +89,7 @@ describe('Catalog API (PostgreSQL)', () => {
     const detail = await request(app.getHttpServer())
       .get(`/api/offers/${offerThailand}`)
       .expect(200);
-    expect(detail.body).toMatchObject({
+    expect(detail.body.data).toMatchObject({
       id: offerThailand,
       branchId: branchThailand,
       brand: 'Toyota',

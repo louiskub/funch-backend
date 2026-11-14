@@ -1,15 +1,43 @@
 # FUNCH backend
 
-NestJS API backed by PostgreSQL. Start the local database from this directory:
+NestJS API backed by PostgreSQL and MinIO. Start the local database from this directory:
 
 ```sh
 docker compose -p funch-ticket02 up -d postgres
 cp .env.example .env
+set -a; . ./.env; set +a
 npm run db:setup
 npm run start:dev
 ```
 
 The compose project uses host port `15432` and a project-scoped volume. `db:setup` applies the checked-in catalog schema and repeatable demo seed. `db:migrate` and `db:seed` can be run separately. Configure `DATABASE_URL` for another database; the default local value is `postgres://car-rental:car-rental@localhost:15432/car-rental`.
+
+Start only this project's isolated MinIO services (the command does not start or modify PostgreSQL):
+
+```sh
+docker compose -p funch-ticket05 up -d minio minio-init
+```
+
+MinIO listens on `19000` (S3 API) and `19001` (console), stores data in the `funch-ticket05_funch-minio-data` volume, and creates the `funch-assets` bucket. The app uses a bucket-scoped service account from `.env`; the bucket policy grants anonymous `GetObject` only for `public/*`. Root credentials are only used by the one-shot initializer. Never use `docker compose down -v` against a shared project.
+
+The credentials in `.env.example` are local development values; set unique secrets for any shared or deployed MinIO instance.
+
+Set `MINIO_ENDPOINT` to the backend's service endpoint and `MINIO_PUBLIC_ENDPOINT` to the browser-reachable endpoint. Local defaults use `http://localhost:19000` for both. Public upload is `POST /api/admin/files?visibility=PUBLIC` (multipart field `file`); private image upload is the same endpoint with `visibility=PRIVATE`. Both require an active admin session. Gallery order is saved with `POST /api/admin/fleet/car-types/:id/images` and `{ "imageFileIds": ["...", "..."] }`. `GET /api/admin/files` returns public files for selection. `GET /api/offers/:id` includes ordered `images` with direct public URLs. Admin private downloads use `GET /api/admin/files/:id/signed-get`; the response is no-store and the URL expires in 300 seconds. No private document UI is included.
+
+If a metadata insert fails after MinIO accepts an upload, the API attempts immediate object removal. The scoped retry command removes only objects absent from `file_asset` and at least 24 hours old:
+
+```sh
+set -a; . ./.env; set +a
+npm run files:cleanup-orphans
+```
+
+Run the real MinIO/PostgreSQL integration suite against its isolated database and bucket:
+
+```sh
+docker exec funch-ticket02-postgres-1 createdb -U car-rental funch_ticket05_test
+FILES_TEST_DATABASE_URL=postgres://car-rental:car-rental@localhost:15432/funch_ticket05_test DATABASE_URL=postgres://car-rental:car-rental@localhost:15432/funch_ticket05_test npm run db:setup
+FILES_TEST_DATABASE_URL=postgres://car-rental:car-rental@localhost:15432/funch_ticket05_test npm run test:e2e -- --runInBand test/files.e2e-spec.ts
+```
 
 ## Public catalog API
 

@@ -51,7 +51,7 @@ export class AdminFleetService {
   async carTypes() {
     return (
       await this.db.query(
-        `SELECT id, brand, model, seats, transmission, fuel_type AS "fuelType", features, is_active AS "isActive"
+        `SELECT id, brand, model, seats, transmission, fuel_type AS "fuelType", features, image_file_ids AS "imageFileIds", is_active AS "isActive"
        FROM car_type ORDER BY brand, model`,
       )
     ).rows;

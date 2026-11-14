@@ -13,6 +13,9 @@ import { OptionsController } from './options.controller';
 import { OptionsService } from './options.service';
 import { AdminFleetController } from './admin-fleet.controller';
 import { AdminFleetService } from './admin-fleet.service';
+import { FilesController } from './files.controller';
+import { FilesService } from './files.service';
+import { StorageService } from './storage.service';
 
 @Module({
   imports: [],
@@ -22,6 +25,7 @@ import { AdminFleetService } from './admin-fleet.service';
     AuthController,
     OptionsController,
     AdminFleetController,
+    FilesController,
   ],
   providers: [
     AppService,
@@ -34,6 +38,8 @@ import { AdminFleetService } from './admin-fleet.service';
     StateChangeOriginGuard,
     OptionsService,
     AdminFleetService,
+    FilesService,
+    StorageService,
   ],
 })
 export class AppModule {}

@@ -1,9 +1,32 @@
 import { Injectable } from '@nestjs/common';
 import { DatabaseService } from './database.service';
+import { StorageService } from './storage.service';
+import type { QueryResultRow } from 'pg';
+
+type CatalogImageRow = {
+  id: string;
+  originalName: string;
+  mimeType: string;
+  objectKey: string;
+};
+type CatalogOfferRow = QueryResultRow & { images: CatalogImageRow[] };
 
 @Injectable()
 export class CatalogService {
-  constructor(private readonly db: DatabaseService) {}
+  constructor(
+    private readonly db: DatabaseService,
+    private readonly storage: StorageService,
+  ) {}
+
+  private withImages<T extends { images: CatalogImageRow[] }>(rows: T[]) {
+    return rows.map(({ images, ...row }) => ({
+      ...row,
+      images: images.map(({ objectKey, ...image }) => ({
+        ...image,
+        url: this.storage.publicUrl(objectKey),
+      })),
+    }));
+  }
 
   async countries() {
     const { rows } = await this.db.query(
@@ -34,9 +57,11 @@ export class CatalogService {
   }
 
   async offers(branchId: string) {
-    const { rows } = await this.db.query(
+    const { rows } = await this.db.query<CatalogOfferRow>(
       `SELECT o.id, o.branch_id AS "branchId", t.id AS "carTypeId", t.brand, t.model, t.seats, t.transmission, t.fuel_type AS "fuelType",
-              t.features, t.image_file_ids AS "imageFileIds", o.base_hourly_rate::text AS "baseHourlyRate",
+              t.features, COALESCE((SELECT json_agg(json_build_object('id', f.id, 'originalName', f.original_name, 'mimeType', f.mime_type, 'objectKey', f.object_key) ORDER BY r.ordinality)
+                FROM unnest(t.image_file_ids) WITH ORDINALITY r(id, ordinality) JOIN file_asset f ON f.id = r.id AND f.visibility = 'PUBLIC'), '[]'::json) AS images,
+              o.base_hourly_rate::text AS "baseHourlyRate",
               o.base_daily_rate::text AS "baseDailyRate", o.currency_code AS "currencyCode",
               b.name AS "branchName", b.city, b.timezone, c.code AS "countryCode"
        FROM car_type_branch o
@@ -47,13 +72,15 @@ export class CatalogService {
        ORDER BY t.brand, t.model`,
       [branchId],
     );
-    return rows;
+    return this.withImages(rows);
   }
 
   async offer(offerId: string) {
-    const { rows } = await this.db.query(
+    const { rows } = await this.db.query<CatalogOfferRow>(
       `SELECT o.id, o.branch_id AS "branchId", t.id AS "carTypeId", t.brand, t.model, t.seats, t.transmission, t.fuel_type AS "fuelType",
-              t.features, t.image_file_ids AS "imageFileIds", o.base_hourly_rate::text AS "baseHourlyRate",
+              t.features, COALESCE((SELECT json_agg(json_build_object('id', f.id, 'originalName', f.original_name, 'mimeType', f.mime_type, 'objectKey', f.object_key) ORDER BY r.ordinality)
+                FROM unnest(t.image_file_ids) WITH ORDINALITY r(id, ordinality) JOIN file_asset f ON f.id = r.id AND f.visibility = 'PUBLIC'), '[]'::json) AS images,
+              o.base_hourly_rate::text AS "baseHourlyRate",
               o.base_daily_rate::text AS "baseDailyRate", o.currency_code AS "currencyCode",
               b.name AS "branchName", b.city, b.timezone, c.code AS "countryCode"
        FROM car_type_branch o
@@ -63,6 +90,6 @@ export class CatalogService {
        WHERE o.id = $1 AND o.is_active`,
       [offerId],
     );
-    return rows[0] ?? null;
+    return rows[0] ? this.withImages(rows)[0] : null;
   }
 }

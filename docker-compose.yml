@@ -19,15 +19,14 @@ services:
 
   minio:
     image: minio/minio:latest
-    container_name: car-rental-minio
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "19000:9000"
+      - "19001:9001"
     environment:
-      MINIO_ROOT_USER: car-rental
-      MINIO_ROOT_PASSWORD: car-rental
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-funch-root}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-funch-local-root-secret-change-this}
     volumes:
-      - car-rental-minio-data:/data
+      - funch-minio-data:/data
     command: server /data --console-address ":9001"
     healthcheck:
       test: ["CMD", "mc", "ready", "local"]
@@ -35,60 +34,35 @@ services:
       timeout: 5s
       retries: 5
 
-    restart: "no"
-
   minio-init:
     image: minio/mc:latest
-    container_name: uniassess-minio-init
     depends_on:
       minio:
         condition: service_healthy
-    volumes:
-      - ./apps/api/src/data/template:/templates:ro
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-funch-root}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-funch-local-root-secret-change-this}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-funch-app}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-funch-local-secret-change-this}
+      MINIO_BUCKET: ${MINIO_BUCKET:-funch-assets}
+      FILES_TEST_BUCKET: ${FILES_TEST_BUCKET:-funch-assets-ticket05-test}
     entrypoint: |
       /bin/sh -c '
-        until mc alias set local http://minio:9000 uniassess uniassess; do
-          echo "Waiting for MinIO..."
-          sleep 1
-        done
-
-        mc mb -p local/uniassess-bucket || true;
-
-        mc anonymous set none local/uniassess-bucket;
-
-        printf "%s\n" \
-          "{" \
-          "  \"Version\": \"2012-10-17\"," \
-          "  \"Statement\": [" \
-          "    {" \
-          "      \"Effect\": \"Allow\"," \
-          "      \"Principal\": \"*\"," \
-          "      \"Action\": [\"s3:GetObject\"]," \
-          "      \"Resource\": [\"arn:aws:s3:::uniassess-bucket/public/*\"]" \
-          "    }" \
-          "  ]" \
-          "}" > /tmp/public-policy.json;
-
-        cat /tmp/public-policy.json;
-
-        mc anonymous set-json /tmp/public-policy.json local/uniassess-bucket;
-
-        touch /tmp/.gitkeep;
-        mc cp /tmp/.gitkeep local/uniassess-bucket/public/.gitkeep || true;
-        mc cp /tmp/.gitkeep local/uniassess-bucket/private/.gitkeep || true;
-
-        for template in /templates/*.csv /templates/*.xls; do
-          [ -f "$$template" ] || continue;
-          mc cp "$$template" local/uniassess-bucket/public/template/;
-        done
-
-        echo "MinIO bucket uniassess-bucket created.";
-        echo "CSV and XLS templates seeded under public/template/.";
-        echo "public/* is readable by static URL.";
-        echo "private/* is not public and should use presigned URL.";
+        set -eu
+        mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"
+        mc mb --ignore-existing "local/$$MINIO_BUCKET"
+        mc mb --ignore-existing "local/$$FILES_TEST_BUCKET"
+        printf "%s" "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":\"*\",\"Action\":[\"s3:GetObject\"],\"Resource\":[\"arn:aws:s3:::$$MINIO_BUCKET/public/*\"]}]}" > /tmp/anonymous.json
+        printf "%s" "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":\"*\",\"Action\":[\"s3:GetObject\"],\"Resource\":[\"arn:aws:s3:::$$FILES_TEST_BUCKET/public/*\"]}]}" > /tmp/anonymous-test.json
+        printf "%s" "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":[\"s3:ListBucket\"],\"Resource\":[\"arn:aws:s3:::$$MINIO_BUCKET\",\"arn:aws:s3:::$$FILES_TEST_BUCKET\"]},{\"Effect\":\"Allow\",\"Action\":[\"s3:GetObject\",\"s3:PutObject\",\"s3:DeleteObject\"],\"Resource\":[\"arn:aws:s3:::$$MINIO_BUCKET/*\",\"arn:aws:s3:::$$FILES_TEST_BUCKET/*\"]}]}" > /tmp/app.json
+        mc anonymous set-json /tmp/anonymous.json "local/$$MINIO_BUCKET"
+        mc anonymous set-json /tmp/anonymous-test.json "local/$$FILES_TEST_BUCKET"
+        mc admin policy create local funch-assets-app /tmp/app.json || true
+        mc admin user add local "$$MINIO_ACCESS_KEY" "$$MINIO_SECRET_KEY" || true
+        mc admin policy attach local funch-assets-app --user "$$MINIO_ACCESS_KEY"
+        mc anonymous get-json "local/$$MINIO_BUCKET"
       '
-    restart: "no"
 
 volumes:
   car-rental-postgres-data:
-  car-rental-minio-data:
+  funch-minio-data:

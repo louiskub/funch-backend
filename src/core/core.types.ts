@@ -14,3 +14,6 @@ export interface Money {
 
 export type BookingStatus =
   'PENDING' | 'APPROVED' | 'REJECTED' | 'IN_USE' | 'COMPLETED' | 'CANCELLED';
+
+export type PolicyDecision =
+  { allowed: true; reason: null } | { allowed: false; reason: string };

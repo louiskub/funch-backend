@@ -1,4 +1,4 @@
-import type { BookingStatus, IsoInstant } from './core.types';
+import type { BookingStatus, IsoInstant, PolicyDecision } from './core.types';
 
 export interface CalculateReadyAtInput {
   returnAt: IsoInstant;
@@ -57,7 +57,7 @@ export interface CanCancelBookingInput {
   cancellationReason: string | null;
 }
 
-export function canCancelBooking(input: CanCancelBookingInput): boolean {
+export function canCancelBooking(input: CanCancelBookingInput): PolicyDecision {
   void input;
   throw new Error('Not implemented: canCancelBooking (BL-07)');
 }
@@ -77,7 +77,7 @@ export interface CanAssignCarInput {
   now: IsoInstant;
 }
 
-export function canAssignCar(input: CanAssignCarInput): boolean {
+export function canAssignCar(input: CanAssignCarInput): PolicyDecision {
   void input;
   throw new Error('Not implemented: canAssignCar (BL-08)');
 }

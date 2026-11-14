@@ -1,0 +1,68 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "15432:5432"
+    volumes:
+      - car-rental-postgres-data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: car-rental
+      POSTGRES_USER: car-rental
+      POSTGRES_PASSWORD: car-rental
+      TZ: UTC
+      PGTZ: UTC
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U car-rental -d car-rental"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    ports:
+      - "19000:9000"
+      - "19001:9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-funch-root}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-funch-local-root-secret-change-this}
+    volumes:
+      - funch-minio-data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-funch-root}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-funch-local-root-secret-change-this}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-funch-app}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-funch-local-secret-change-this}
+      MINIO_BUCKET: ${MINIO_BUCKET:-funch-assets}
+      FILES_TEST_BUCKET: ${FILES_TEST_BUCKET:-funch-assets-ticket05-test}
+    entrypoint: |
+      /bin/sh -c '
+        set -eu
+        mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"
+        mc mb --ignore-existing "local/$$MINIO_BUCKET"
+        mc mb --ignore-existing "local/$$FILES_TEST_BUCKET"
+        printf "%s" "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":\"*\",\"Action\":[\"s3:GetObject\"],\"Resource\":[\"arn:aws:s3:::$$MINIO_BUCKET/public/*\"]}]}" > /tmp/anonymous.json
+        printf "%s" "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":\"*\",\"Action\":[\"s3:GetObject\"],\"Resource\":[\"arn:aws:s3:::$$FILES_TEST_BUCKET/public/*\"]}]}" > /tmp/anonymous-test.json
+        printf "%s" "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":[\"s3:ListBucket\"],\"Resource\":[\"arn:aws:s3:::$$MINIO_BUCKET\",\"arn:aws:s3:::$$FILES_TEST_BUCKET\"]},{\"Effect\":\"Allow\",\"Action\":[\"s3:GetObject\",\"s3:PutObject\",\"s3:DeleteObject\"],\"Resource\":[\"arn:aws:s3:::$$MINIO_BUCKET/*\",\"arn:aws:s3:::$$FILES_TEST_BUCKET/*\"]}]}" > /tmp/app.json
+        mc anonymous set-json /tmp/anonymous.json "local/$$MINIO_BUCKET"
+        mc anonymous set-json /tmp/anonymous-test.json "local/$$FILES_TEST_BUCKET"
+        mc admin policy create local funch-assets-app /tmp/app.json || true
+        mc admin user add local "$$MINIO_ACCESS_KEY" "$$MINIO_SECRET_KEY" || true
+        mc admin policy attach local funch-assets-app --user "$$MINIO_ACCESS_KEY"
+        mc anonymous get-json "local/$$MINIO_BUCKET"
+      '
+
+volumes:
+  car-rental-postgres-data:
+  funch-minio-data:

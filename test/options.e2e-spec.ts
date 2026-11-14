@@ -17,13 +17,13 @@ describe('Branch options API (isolated PostgreSQL)', () => {
   let customerCookie: string;
 
   beforeAll(async () => {
-    const databaseUrl = process.env.AUTH_TEST_DATABASE_URL;
+    const databaseUrl = process.env.OPTIONS_TEST_DATABASE_URL;
     if (
       !databaseUrl ||
       new URL(databaseUrl).pathname !== '/funch_ticket06_test'
     ) {
       throw new Error(
-        'AUTH_TEST_DATABASE_URL must target the isolated funch_ticket06_test database',
+        'OPTIONS_TEST_DATABASE_URL must target the isolated funch_ticket06_test database',
       );
     }
     process.env.DATABASE_URL = databaseUrl;

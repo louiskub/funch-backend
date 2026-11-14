@@ -185,7 +185,9 @@ export class AdminFleetService {
     if (table === 'car_type' && filtered.some(([key]) => key !== 'isActive'))
       assignments.push('updated_at = now()');
     try {
-      const rows = await this.dataSource.query<Record<string, unknown>[]>(
+      const [rows] = await this.dataSource.query<
+        [Record<string, unknown>[], number]
+      >(
         `UPDATE ${table} SET ${assignments.join(', ')} WHERE id = $${filtered.length + 1} RETURNING ${returning}`,
         [...filtered.map(([, value]) => value), id],
       );

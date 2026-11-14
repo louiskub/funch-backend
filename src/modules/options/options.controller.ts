@@ -6,12 +6,11 @@ import {
   Patch,
   Post,
   UseGuards,
-  UsePipes,
-  ValidationPipe,
 } from '@nestjs/common';
-import { StateChangeOriginGuard } from '../../common/guards/state-change-origin.guard';
-import { Roles } from '../auth/auth.decorators';
-import { RolesGuard, SessionGuard } from '../auth/auth.guards';
+import { ApiCookieAuth } from '@nestjs/swagger';
+import { Roles } from '../auth/decorators/auth.decorators';
+import { RoleGuard } from '../auth/guards/role.guard';
+import { SessionAuthGuard } from '../auth/guards/session-auth.guard';
 import { UserRole } from '../auth/enums/user-role.enum';
 import {
   BranchOptionParams,
@@ -22,13 +21,6 @@ import {
 import { OptionsService } from './options.service';
 
 @Controller()
-@UsePipes(
-  new ValidationPipe({
-    transform: true,
-    whitelist: true,
-    forbidNonWhitelisted: true,
-  }),
-)
 export class OptionsController {
   constructor(private readonly options: OptionsService) {}
 
@@ -38,28 +30,32 @@ export class OptionsController {
   }
 
   @Get('admin/options/branches')
-  @UseGuards(SessionGuard, RolesGuard)
+  @ApiCookieAuth()
+  @UseGuards(SessionAuthGuard, RoleGuard)
   @Roles(UserRole.ADMIN)
   branches() {
     return this.options.branches();
   }
 
   @Get('admin/options/branches/:branchId')
-  @UseGuards(SessionGuard, RolesGuard)
+  @ApiCookieAuth()
+  @UseGuards(SessionAuthGuard, RoleGuard)
   @Roles(UserRole.ADMIN)
   adminOptions(@Param() { branchId }: BranchOptionParams) {
     return this.options.adminForBranch(branchId);
   }
 
   @Post('admin/options')
-  @UseGuards(SessionGuard, RolesGuard, StateChangeOriginGuard)
+  @ApiCookieAuth()
+  @UseGuards(SessionAuthGuard, RoleGuard)
   @Roles(UserRole.ADMIN)
   create(@Body() input: CreateOptionDto) {
     return this.options.create(input);
   }
 
   @Patch('admin/options/:optionId')
-  @UseGuards(SessionGuard, RolesGuard, StateChangeOriginGuard)
+  @ApiCookieAuth()
+  @UseGuards(SessionAuthGuard, RoleGuard)
   @Roles(UserRole.ADMIN)
   update(
     @Param() { optionId }: OptionIdParams,

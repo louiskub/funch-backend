@@ -81,7 +81,7 @@ export class OptionsService {
         'Create a new option to change pricing type',
       );
     try {
-      const rows = await this.dataSource.query<OptionRecord[]>(
+      const [rows] = await this.dataSource.query<[OptionRecord[], number]>(
         `UPDATE car_option AS o SET code = COALESCE($2, code), name = COALESCE($3, name),
          description = COALESCE($4, description), category = COALESCE($5, category),
          price = COALESCE($6::numeric, price), quantity_stock = CASE WHEN $7 THEN $8::integer ELSE quantity_stock END,

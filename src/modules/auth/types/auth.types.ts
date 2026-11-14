@@ -1,5 +1,5 @@
-import type { UserRole } from './enums/user-role.enum';
-export { UserRole } from './enums/user-role.enum';
+import type { UserRole } from '../enums/user-role.enum';
+export { UserRole } from '../enums/user-role.enum';
 
 export type AuthUser = {
   id: string;

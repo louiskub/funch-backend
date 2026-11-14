@@ -11,7 +11,14 @@ const branchId = '20000000-0000-4000-8000-000000000001';
 const password = 'long-enough-test-password';
 
 function object(text: string): Record<string, unknown> {
-  const value: unknown = JSON.parse(text) as unknown;
+  const envelope: unknown = JSON.parse(text);
+  if (
+    typeof envelope !== 'object' ||
+    envelope === null ||
+    !('data' in envelope)
+  )
+    throw new Error('Expected a response envelope');
+  const value = envelope.data;
   if (typeof value !== 'object' || value === null || Array.isArray(value))
     throw new Error('Expected an object response');
   return Object.fromEntries(Object.entries(value));
@@ -184,7 +191,7 @@ describe('Admin fleet API (PostgreSQL)', () => {
     const publicOffers = await request(app.getHttpServer())
       .get(`/api/branches/${branchId}/offers`)
       .expect(200);
-    expect(JSON.parse(publicOffers.text) as unknown).toEqual(
+    expect(publicOffers.body.data).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           carTypeId: typeId,
@@ -260,14 +267,14 @@ describe('Admin fleet API (PostgreSQL)', () => {
     const inactivePublicOffers = await request(app.getHttpServer())
       .get(`/api/branches/${branchId}/offers`)
       .expect(200);
-    expect(JSON.parse(inactivePublicOffers.text) as unknown).not.toEqual(
+    expect(inactivePublicOffers.body.data).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ carTypeId: typeId })]),
     );
     const allOffers = await request(app.getHttpServer())
       .get('/api/admin/fleet/offers')
       .set('Cookie', adminCookie)
       .expect(200);
-    expect(JSON.parse(allOffers.text) as unknown).toEqual(
+    expect(allOffers.body.data).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: offerId, isActive: false }),
       ]),
@@ -276,7 +283,7 @@ describe('Admin fleet API (PostgreSQL)', () => {
       .get('/api/admin/fleet/car-types')
       .set('Cookie', adminCookie)
       .expect(200);
-    expect(JSON.parse(allTypes.text) as unknown).toEqual(
+    expect(allTypes.body.data).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: typeId, isActive: false }),
       ]),

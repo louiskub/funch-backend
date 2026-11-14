@@ -7,15 +7,13 @@ import {
   Req,
   Res,
   UseGuards,
-  UsePipes,
-  ValidationPipe,
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { AuthService } from './auth.service';
 import { LoginDto, RegisterDto, UpdateProfileDto } from './dto/auth.dto';
-import type { AuthenticatedRequest } from './auth.types';
-import { SESSION_COOKIE, SessionGuard } from './auth.guards';
-import { StateChangeOriginGuard } from '../../common/guards/state-change-origin.guard';
+import type { AuthenticatedRequest } from './types/auth.types';
+import { SESSION_COOKIE } from './constants/session.constants';
+import { SessionAuthGuard } from './guards/session-auth.guard';
 import configFactory from '../../platform/config/configuration';
 
 const cookieOptions = () => ({
@@ -35,14 +33,6 @@ function cookieToken(request: Request): string | undefined {
 }
 
 @Controller('auth')
-@UsePipes(
-  new ValidationPipe({
-    transform: true,
-    whitelist: true,
-    forbidNonWhitelisted: true,
-  }),
-)
-@UseGuards(StateChangeOriginGuard)
 export class AuthController {
   constructor(private readonly auth: AuthService) {}
 
@@ -83,13 +73,15 @@ export class AuthController {
   }
 
   @Get('me')
-  @UseGuards(SessionGuard)
+  @ApiCookieAuth()
+  @UseGuards(SessionAuthGuard)
   me(@Req() request: AuthenticatedRequest) {
     return { user: request.authUser };
   }
 
   @Patch('me')
-  @UseGuards(SessionGuard)
+  @ApiCookieAuth()
+  @UseGuards(SessionAuthGuard)
   async updateProfile(
     @Req() request: AuthenticatedRequest,
     @Body() input: UpdateProfileDto,

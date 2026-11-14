@@ -64,10 +64,12 @@ describe('Catalog API (PostgreSQL)', () => {
     try {
       await request(app.getHttpServer())
         .get(`/api/branches/${branchThailand}/offers`)
-        .expect(200, []);
+        .expect(200)
+        .expect(({ body }) => expect(body.data).toEqual([]));
       await request(app.getHttpServer())
         .get('/api/countries/TH/branches')
-        .expect(200, []);
+        .expect(200)
+        .expect(({ body }) => expect(body.data).toEqual([]));
       const remainingCountries = await request(app.getHttpServer())
         .get('/api/countries')
         .expect(200);

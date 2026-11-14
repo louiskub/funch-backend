@@ -12,30 +12,23 @@ import {
   UploadedFile,
   UseGuards,
   UseInterceptors,
-  UsePipes,
-  ValidationPipe,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { ApiBody, ApiConsumes, ApiCookieAuth, ApiQuery } from '@nestjs/swagger';
 import { memoryStorage } from 'multer';
 import type { Response } from 'express';
-import { Roles } from '../auth/auth.decorators';
-import { RolesGuard, SessionGuard } from '../auth/auth.guards';
+import { Roles } from '../auth/decorators/auth.decorators';
+import { RoleGuard } from '../auth/guards/role.guard';
+import { SessionAuthGuard } from '../auth/guards/session-auth.guard';
 import { UserRole } from '../auth/enums/user-role.enum';
-import type { AuthenticatedRequest } from '../auth/auth.types';
-import { StateChangeOriginGuard } from '../../common/guards/state-change-origin.guard';
+import type { AuthenticatedRequest } from '../auth/types/auth.types';
 import { FilesService, maxFileBytes } from './files.service';
 import { FileIdParams, GalleryDto } from './dto/files.dto';
 
 @Controller('admin')
-@UseGuards(SessionGuard, RolesGuard, StateChangeOriginGuard)
+@ApiCookieAuth()
+@UseGuards(SessionAuthGuard, RoleGuard)
 @Roles(UserRole.ADMIN)
-@UsePipes(
-  new ValidationPipe({
-    transform: true,
-    whitelist: true,
-    forbidNonWhitelisted: true,
-  }),
-)
 export class FilesController {
   constructor(private readonly files: FilesService) {}
 
@@ -44,6 +37,15 @@ export class FilesController {
   }
 
   @Post('files')
+  @ApiConsumes('multipart/form-data')
+  @ApiQuery({ name: 'visibility', enum: ['PUBLIC', 'PRIVATE'] })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['file'],
+      properties: { file: { type: 'string', format: 'binary' } },
+    },
+  })
   @UseInterceptors(
     FileInterceptor('file', {
       storage: memoryStorage(),

@@ -1,6 +1,6 @@
-import { Module } from '@nestjs/common';
-import { APP_INTERCEPTOR } from '@nestjs/core';
-import { CommonModule } from './common/common.module';
+import { Module, ValidationPipe } from '@nestjs/common';
+import { APP_FILTER, APP_INTERCEPTOR, APP_PIPE } from '@nestjs/core';
+import { GlobalExceptionFilter } from './common/filters/global-exception.filter';
 import { ResponseFormatInterceptor } from './common/interceptors/response-format.interceptor';
 import { AdminFleetModule } from './modules/admin-fleet/admin-fleet.module';
 import { AuthModule } from './modules/auth/auth.module';
@@ -12,7 +12,6 @@ import { PlatformModule } from './platform/platform.module';
 
 @Module({
   imports: [
-    CommonModule,
     PlatformModule,
     AuthModule,
     CatalogModule,
@@ -23,6 +22,15 @@ import { PlatformModule } from './platform/platform.module';
   ],
   providers: [
     { provide: APP_INTERCEPTOR, useClass: ResponseFormatInterceptor },
+    { provide: APP_FILTER, useClass: GlobalExceptionFilter },
+    {
+      provide: APP_PIPE,
+      useValue: new ValidationPipe({
+        whitelist: true,
+        forbidNonWhitelisted: true,
+        transform: true,
+      }),
+    },
   ],
 })
 export class AppModule {}

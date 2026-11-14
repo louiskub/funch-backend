@@ -4,10 +4,13 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { DataSource } from 'typeorm';
-import type { AuthUser } from './auth.types';
-import { PasswordService } from './password.service';
+import { DataSource, IsNull } from 'typeorm';
+import type { AuthUser } from './types/auth.types';
 import { LoginDto, RegisterDto, UpdateProfileDto } from './dto/auth.dto';
+import { AppUser } from './entities/app-user.entity';
+import { UserSession } from './entities/user-session.entity';
+import { UserRole } from './enums/user-role.enum';
+import { PasswordService } from './services/password.service';
 
 const SESSION_DAYS = 14;
 
@@ -29,25 +32,24 @@ export class AuthService {
     const passwordHash = await this.passwords.hash(input.password);
     try {
       return await this.dataSource.transaction(async (manager) => {
-        const rows = await manager.query<AuthUser[]>(
-          `INSERT INTO app_user (id, email, password_hash, name, phone, role, is_suspended)
-           VALUES ($1, $2, $3, $4, $5, 'CUSTOMER', false)
-           RETURNING id, email, name, phone, role, is_suspended AS "isSuspended"`,
-          [
-            randomUUID(),
-            email,
-            passwordHash,
-            input.name.trim(),
-            input.phone.trim(),
-          ],
-        );
-        const session = this.newSession(rows[0]);
-        await manager.query(
-          'INSERT INTO user_session (token_hash, user_id, expires_at) VALUES ($1, $2, $3)',
-          [session.tokenHash, session.user.id, session.expiresAt],
-        );
+        const user = await manager.getRepository(AppUser).save({
+          id: randomUUID(),
+          email,
+          passwordHash,
+          name: input.name.trim(),
+          phone: input.phone.trim(),
+          role: UserRole.CUSTOMER,
+          isSuspended: false,
+        });
+        const session = this.newSession(user);
+        await manager.getRepository(UserSession).save({
+          tokenHash: session.tokenHash,
+          userId: user.id,
+          expiresAt: session.expiresAt,
+          revokedAt: null,
+        });
         return {
-          user: session.user,
+          user: this.publicUser(user),
           token: session.token,
           expiresAt: session.expiresAt,
         };
@@ -63,14 +65,14 @@ export class AuthService {
   }
 
   async login(input: LoginDto) {
-    const rows = await this.dataSource.query<
-      (AuthUser & { passwordHash: string })[]
-    >(
-      `SELECT id, email, name, phone, role, is_suspended AS "isSuspended", password_hash AS "passwordHash"
-       FROM app_user WHERE email = $1`,
-      [input.email.trim().toLowerCase()],
-    );
-    const user = rows[0];
+    const user = await this.dataSource
+      .getRepository(AppUser)
+      .createQueryBuilder('user')
+      .addSelect('user.passwordHash')
+      .where('user.email = :email', {
+        email: input.email.trim().toLowerCase(),
+      })
+      .getOne();
     if (
       !user ||
       user.isSuspended ||
@@ -78,22 +80,16 @@ export class AuthService {
     ) {
       throw new UnauthorizedException('Invalid email or password');
     }
-    const authenticatedUser: AuthUser = {
-      id: user.id,
-      email: user.email,
-      name: user.name,
-      phone: user.phone,
-      role: user.role,
-      isSuspended: user.isSuspended,
-    };
-    return this.createSession(authenticatedUser);
+    return this.createSession(this.publicUser(user));
   }
 
   async logout(token: string | undefined): Promise<void> {
-    if (token)
-      await this.dataSource.query(
-        'UPDATE user_session SET revoked_at = now() WHERE token_hash = $1 AND revoked_at IS NULL',
-        [this.tokenHash(token)],
+    if (!token) return;
+    await this.dataSource
+      .getRepository(UserSession)
+      .update(
+        { tokenHash: this.tokenHash(token), revokedAt: IsNull() },
+        { revokedAt: new Date() },
       );
   }
 
@@ -102,17 +98,15 @@ export class AuthService {
     input: UpdateProfileDto,
   ): Promise<AuthUser> {
     try {
-      const rows = await this.dataSource.query<AuthUser[]>(
-        `UPDATE app_user SET name = $2, email = $3, phone = $4, updated_at = now()
-         WHERE id = $1 RETURNING id, email, name, phone, role, is_suspended AS "isSuspended"`,
-        [
-          userId,
-          input.name.trim(),
-          input.email.trim().toLowerCase(),
-          input.phone.trim(),
-        ],
-      );
-      return rows[0];
+      const users = this.dataSource.getRepository(AppUser);
+      await users.update(userId, {
+        name: input.name.trim(),
+        email: input.email.trim().toLowerCase(),
+        phone: input.phone.trim(),
+      });
+      const user = await users.findOneBy({ id: userId });
+      if (!user) throw new UnauthorizedException();
+      return this.publicUser(user);
     } catch (error) {
       if (isUniqueViolation(error)) {
         throw new ConflictException(
@@ -125,14 +119,27 @@ export class AuthService {
 
   private async createSession(user: AuthUser) {
     const session = this.newSession(user);
-    await this.dataSource.query(
-      'INSERT INTO user_session (token_hash, user_id, expires_at) VALUES ($1, $2, $3)',
-      [session.tokenHash, user.id, session.expiresAt],
-    );
+    await this.dataSource.getRepository(UserSession).save({
+      tokenHash: session.tokenHash,
+      userId: user.id,
+      expiresAt: session.expiresAt,
+      revokedAt: null,
+    });
     return { user, token: session.token, expiresAt: session.expiresAt };
   }
 
-  private newSession(user: AuthUser) {
+  private publicUser(user: AppUser): AuthUser {
+    return {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      phone: user.phone,
+      role: user.role,
+      isSuspended: user.isSuspended,
+    };
+  }
+
+  private newSession(user: Pick<AuthUser, 'id'>) {
     const token = randomBytes(32).toString('base64url');
     const expiresAt = new Date(Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000);
     return { user, token, tokenHash: this.tokenHash(token), expiresAt };

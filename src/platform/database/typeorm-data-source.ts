@@ -5,6 +5,8 @@ import { Authentication20260809000200 } from './migrations/20260809000200-Authen
 import { Files20260809000500 } from './migrations/20260809000500-Files';
 import { InitialSchema20260809000100 } from './migrations/20260809000100-InitialSchema';
 import { Options20260809000400 } from './migrations/20260809000400-Options';
+import { AppUser } from '../../modules/auth/entities/app-user.entity';
+import { UserSession } from '../../modules/auth/entities/user-session.entity';
 
 export function createAppDataSource() {
   const appConfig = configFactory();
@@ -15,7 +17,7 @@ export function createAppDataSource() {
       ? { rejectUnauthorized: false }
       : false,
     synchronize: false,
-    entities: [],
+    entities: [AppUser, UserSession],
     migrations: [
       InitialSchema20260809000100,
       Authentication20260809000200,

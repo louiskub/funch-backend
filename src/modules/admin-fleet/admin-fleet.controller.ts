@@ -6,13 +6,11 @@ import {
   Patch,
   Post,
   UseGuards,
-  UsePipes,
-  ValidationPipe,
 } from '@nestjs/common';
-import { Roles } from '../auth/auth.decorators';
-import { RolesGuard, SessionGuard } from '../auth/auth.guards';
+import { Roles } from '../auth/decorators/auth.decorators';
+import { RoleGuard } from '../auth/guards/role.guard';
+import { SessionAuthGuard } from '../auth/guards/session-auth.guard';
 import { UserRole } from '../auth/enums/user-role.enum';
-import { StateChangeOriginGuard } from '../../common/guards/state-change-origin.guard';
 import {
   CarDto,
   CarTypeDto,
@@ -25,15 +23,8 @@ import {
 import { AdminFleetService } from './admin-fleet.service';
 
 @Controller('admin/fleet')
-@UseGuards(SessionGuard, RolesGuard, StateChangeOriginGuard)
+@UseGuards(SessionAuthGuard, RoleGuard)
 @Roles(UserRole.ADMIN)
-@UsePipes(
-  new ValidationPipe({
-    transform: true,
-    whitelist: true,
-    forbidNonWhitelisted: true,
-  }),
-)
 export class AdminFleetController {
   constructor(private readonly fleet: AdminFleetService) {}
 

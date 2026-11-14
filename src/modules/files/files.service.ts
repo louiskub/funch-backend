@@ -216,8 +216,8 @@ export class FilesService {
             'Only public images can be added to a gallery',
           );
       }
-      const rows = await manager.query<
-        { id: string; imageFileIds: string[] }[]
+      const [rows] = await manager.query<
+        [{ id: string; imageFileIds: string[] }[], number]
       >(
         `UPDATE car_type SET image_file_ids = $2::uuid[], updated_at = now() WHERE id = $1
          RETURNING id, image_file_ids AS "imageFileIds"`,

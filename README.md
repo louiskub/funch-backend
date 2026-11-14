@@ -12,6 +12,18 @@ npm run start:dev
 
 The compose project uses host port `15432` and a project-scoped volume. The `.env` file is loaded by the start, database, and admin-provision scripts; values already exported in the process take precedence. `db:setup` applies the timestamped TypeORM migrations and repeatable TypeScript seed. `db:migrate` and `db:seed` can be run separately. Configure `DATABASE_URL` for another database and set `DATABASE_SSL=true` when the server requires TLS; the default local URL is `postgres://car-rental:car-rental@localhost:15432/car-rental`.
 
+## HTTP bootstrap and API documentation
+
+The API keeps the `/api` prefix. Swagger UI is available at `/docs`, with the OpenAPI document at `/docs/json`. The document uses the title `FUNCH API` and describes session-cookie authentication through `funch_session`. The Swagger compiler plugin derives request schemas from the DTOs. JSON is served over HTTP without writing a file at startup.
+
+Helmet sets the HTTP security headers. CORS allows the configured `FRONTEND_ORIGIN` with credentials. Swagger uses an existing browser session; its authorization control cannot set an HttpOnly cookie.
+
+`AppModule` registers one global validation pipe, response interceptor, and exception filter. Validation transforms DTOs, rejects undeclared fields, and keeps declared validated fields. Controllers do not register duplicate pipes. `common/` contains shared classes without a `CommonModule`.
+
+Both success and error responses use `{ status: { code, messages }, data }`. Errors have `data: null`, and validation messages are joined into `status.messages`. Server errors return `Internal server error` while their diagnostic details stay in server logs. The frontend reads error messages and preserves the HTTP status in `ApiError`.
+
+## File storage
+
 Start only this project's isolated MinIO services (the command does not start or modify PostgreSQL):
 
 ```sh
@@ -47,7 +59,7 @@ Catalog responses include branch timezone and currency. Monetary numeric columns
 - `GET /api/auth/me` and `PATCH /api/auth/me` read and update the current account profile. Profile fields are `name`, `email`, and `phone`.
 - Sessions use opaque `funch_session` HttpOnly, SameSite=Lax cookies. Protected requests load the current role and suspension state from PostgreSQL.
 - Browser state changes require the configured exact `FRONTEND_ORIGIN`; configure `FRONTEND_ORIGIN` and `DATABASE_URL` for deployment.
-- For later protected routes, compose `SessionGuard` with `RolesGuard` and declare staff access with `@Roles(UserRole.ADMIN)`; use `StateChangeOriginGuard` on cookie-authenticated mutations.
+- For later protected routes, compose `SessionAuthGuard` with `RoleGuard` and declare staff access with `@Roles(UserRole.ADMIN)`.
 
 Provision a demo admin only after applying migrations. The command requires explicit credentials and can promote/reset an account with the matching email:
 
@@ -97,6 +109,8 @@ npm run test:e2e -- --runInBand
 ```
 
 ## Production dependency audit
+
+The 2026-11-15 production audit reports seven package findings: four through MinIO, described below, and three through the existing TypeORM `glob`/`minimatch` chain. The bootstrap changes do not resolve those existing dependency findings.
 
 As of 2026-11-14, `npm audit --omit=dev` reports four package findings through MinIO 8.0.7: `query-string@7.1.3` resolves `decode-uri-component@0.2.2` (including [GHSA-qr28-fpjm-wq7f](https://github.com/advisories/GHSA-qr28-fpjm-wq7f)), and MinIO also includes `stream-json@1.9.1` (including [GHSA-528h-pc64-c93x](https://github.com/advisories/GHSA-528h-pc64-c93x), [GHSA-hqr4-qq8f-hg3x](https://github.com/advisories/GHSA-hqr4-qq8f-hg3x), and [GHSA-mjw6-4jj6-33hc](https://github.com/uhop/stream-json/security/advisories/GHSA-mjw6-4jj6-33hc)). The registry currently lists 8.0.7 as the latest MinIO release, and it still declares both dependency ranges. npm's suggested MinIO 7.1.3 major downgrade still depends on `query-string@7`; it does not resolve the decoder finding. The patched decoder and stream-json releases are ESM packages while these MinIO/query-string call sites load through CommonJS. This project does not apply those cross-major overrides or the SDK downgrade without a supported upstream release and MinIO integration coverage.
 

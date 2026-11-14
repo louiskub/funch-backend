@@ -2,7 +2,8 @@ const { randomUUID } = require('node:crypto');
 const {
   AppDataSource,
 } = require('../dist/platform/database/typeorm-data-source.js');
-const { PasswordService } = require('../dist/modules/auth/password.service.js');
+const { PasswordService } = require('../dist/modules/auth/services/password.service.js');
+const { AppUser } = require('../dist/modules/auth/entities/app-user.entity.js');
 
 async function run() {
   const email = process.env.ADMIN_EMAIL?.trim().toLowerCase();
@@ -22,14 +23,17 @@ async function run() {
   const passwordHash = await new PasswordService().hash(password);
   await AppDataSource.initialize();
   try {
-    await AppDataSource.query(
-      `INSERT INTO app_user (id, email, password_hash, name, phone, role, is_suspended)
-       VALUES ($1, $2, $3, $4, $5, 'ADMIN', false)
-       ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash,
-         name = EXCLUDED.name, phone = EXCLUDED.phone, role = 'ADMIN', is_suspended = false,
-         updated_at = now()`,
-      [randomUUID(), email, passwordHash, name, phone],
-    );
+    const users = AppDataSource.getRepository(AppUser);
+    const existing = await users.findOneBy({ email });
+    await users.save({
+      id: existing?.id ?? randomUUID(),
+      email,
+      passwordHash,
+      name,
+      phone,
+      role: 'ADMIN',
+      isSuspended: false,
+    });
     process.stdout.write(`Provisioned admin account ${email}.\n`);
   } finally {
     await AppDataSource.destroy();

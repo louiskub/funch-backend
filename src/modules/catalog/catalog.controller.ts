@@ -1,11 +1,4 @@
-import {
-  Controller,
-  Get,
-  NotFoundException,
-  Param,
-  UsePipes,
-  ValidationPipe,
-} from '@nestjs/common';
+import { Controller, Get, NotFoundException, Param } from '@nestjs/common';
 import { CatalogService } from './catalog.service';
 import {
   BranchIdParams,
@@ -14,7 +7,6 @@ import {
 } from './dto/catalog.dto';
 
 @Controller()
-@UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
 export class CatalogController {
   constructor(private readonly catalog: CatalogService) {}
 

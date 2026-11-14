@@ -250,7 +250,13 @@ describe('File assets and car type galleries (real PostgreSQL and MinIO)', () =>
       .set('Cookie', adminCookie)
       .set('Origin', origin)
       .send({ imageFileIds: [second.id, first.id] })
-      .expect(201);
+      .expect(201)
+      .expect(({ body }) =>
+        expect(body.data).toEqual({
+          id: firstType,
+          imageFileIds: [second.id, first.id],
+        }),
+      );
     await request(app.getHttpServer())
       .post(`/api/admin/fleet/car-types/${secondType}/images`)
       .set('Cookie', adminCookie)

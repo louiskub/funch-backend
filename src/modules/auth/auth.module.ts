@@ -1,15 +1,15 @@
 import { Module } from '@nestjs/common';
-import { CommonModule } from '../../common/common.module';
 import { PlatformModule } from '../../platform/platform.module';
 import { AuthController } from './auth.controller';
-import { SessionGuard, RolesGuard } from './auth.guards';
+import { RoleGuard } from './guards/role.guard';
+import { SessionAuthGuard } from './guards/session-auth.guard';
 import { AuthService } from './auth.service';
-import { PasswordService } from './password.service';
+import { PasswordService } from './services/password.service';
 
 @Module({
-  imports: [CommonModule, PlatformModule],
+  imports: [PlatformModule],
   controllers: [AuthController],
-  providers: [AuthService, PasswordService, SessionGuard, RolesGuard],
-  exports: [SessionGuard, RolesGuard],
+  providers: [AuthService, PasswordService, SessionAuthGuard, RoleGuard],
+  exports: [SessionAuthGuard, RoleGuard],
 })
 export class AuthModule {}

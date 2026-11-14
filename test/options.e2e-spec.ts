@@ -131,7 +131,8 @@ describe('Branch options API (isolated PostgreSQL)', () => {
     );
     await request(app.getHttpServer())
       .get(`/api/branches/${branchUs}/options`)
-      .expect(200, []);
+      .expect(200)
+      .expect(({ body }) => expect(body.data).toEqual([]));
     const gpsId = (
       await db.query<QueryResultRow & { id: string }>(
         'SELECT id FROM car_option WHERE code = $1 AND branch_id = $2',
@@ -143,7 +144,10 @@ describe('Branch options API (isolated PostgreSQL)', () => {
       .set('Cookie', adminCookie)
       .set('Origin', origin)
       .send({ isActive: false })
-      .expect(200);
+      .expect(200)
+      .expect(({ body }) =>
+        expect(body.data).toMatchObject({ id: gpsId, isActive: false }),
+      );
     const remainingOptions = await request(app.getHttpServer())
       .get(`/api/branches/${branchThailand}/options`)
       .expect(200);
@@ -156,7 +160,8 @@ describe('Branch options API (isolated PostgreSQL)', () => {
     try {
       await request(app.getHttpServer())
         .get(`/api/branches/${branchThailand}/options`)
-        .expect(200, []);
+        .expect(200)
+        .expect(({ body }) => expect(body.data).toEqual([]));
     } finally {
       await db.query('UPDATE branch SET is_active = true WHERE id = $1', [
         branchThailand,

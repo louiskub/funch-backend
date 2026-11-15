@@ -7,6 +7,8 @@ import {
   calculateRentalPrice,
   canAssignCar,
   canCancelBooking,
+  getCurrencyMinorUnits,
+  isValidMinorUnitsAmount,
   summarizeBookings,
 } from './index';
 import type {
@@ -990,5 +992,26 @@ describe('summarizeBookings (BL-09)', () => {
     expect(first.popularCarTypes).toEqual(reversed.popularCarTypes);
     expect(first.popularCarTypes).toHaveLength(3);
     expect(bookings).toEqual(original);
+  });
+
+  describe('Currency minor units awareness and validation', () => {
+    it('returns correct minor units according to reference data', () => {
+      expect(getCurrencyMinorUnits('JPY')).toBe(0);
+      expect(getCurrencyMinorUnits('KRW')).toBe(0);
+      expect(getCurrencyMinorUnits('THB')).toBe(2);
+      expect(getCurrencyMinorUnits('USD')).toBe(2);
+      expect(getCurrencyMinorUnits('EUR')).toBe(2);
+    });
+
+    it('validates decimal fractions against currency minor units', () => {
+      expect(isValidMinorUnitsAmount('1500', 'JPY')).toBe(true);
+      expect(isValidMinorUnitsAmount('1500.0', 'JPY')).toBe(false);
+      expect(isValidMinorUnitsAmount('1500.5', 'JPY')).toBe(false);
+
+      expect(isValidMinorUnitsAmount('1500', 'THB')).toBe(true);
+      expect(isValidMinorUnitsAmount('1500.5', 'THB')).toBe(true);
+      expect(isValidMinorUnitsAmount('1500.50', 'THB')).toBe(true);
+      expect(isValidMinorUnitsAmount('1500.555', 'THB')).toBe(false);
+    });
   });
 });

@@ -71,3 +71,31 @@ export function assertSameCurrency(...values: Money[]): string {
   for (const value of values) parseDecimal(value.amount);
   return currency;
 }
+
+export const CURRENCY_MINOR_UNITS: Record<string, number> = {
+  AED: 2,
+  AUD: 2,
+  CAD: 2,
+  GBP: 2,
+  JPY: 0,
+  KRW: 0,
+  MYR: 2,
+  SGD: 2,
+  THB: 2,
+  USD: 2,
+};
+
+export function getCurrencyMinorUnits(currencyCode: string): number {
+  return CURRENCY_MINOR_UNITS[currencyCode.toUpperCase()] ?? 2;
+}
+
+export function isValidMinorUnitsAmount(
+  amount: ExactDecimal,
+  currencyCode: string,
+): boolean {
+  const match = /^(?:0|[1-9]\d*)(?:\.(\d+))?$/.exec(amount);
+  if (!match) return false;
+  const fraction = match[1] ?? '';
+  const minorUnits = getCurrencyMinorUnits(currencyCode);
+  return fraction.length <= minorUnits;
+}

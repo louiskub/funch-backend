@@ -98,7 +98,7 @@ describe('Booking API (isolated PostgreSQL)', () => {
   }
 
   it('quotes on the server and creates one pending booking for repeated checkout submissions', async () => {
-    const item = await createBooking();
+    const item = await createBooking([], future(1), future(2));
     expect(item.id).toBeTruthy();
     await request(app.getHttpServer())
       .post('/api/bookings/register-checkout')
@@ -332,7 +332,7 @@ describe('Booking API (isolated PostgreSQL)', () => {
       .expect(201)
       .expect(({ body }) => expect(body.data.status).toBe('IN_USE'));
 
-    const noShow = await createBooking();
+    const noShow = await createBooking([], future(5), future(6));
     await db.query(
       `UPDATE booking SET pickup_at=now()-interval '1 minute' WHERE id=$1`,
       [noShow.id],
@@ -462,7 +462,7 @@ describe('Booking API (isolated PostgreSQL)', () => {
     expect(report.body.data.bookingCounts).toContainEqual({
       branchId: expect.any(String),
       status: 'COMPLETED',
-      count: 2,
+      count: 1,
     });
     const data = report.body.data as {
       confirmedAdditionalChargeValues: Array<{

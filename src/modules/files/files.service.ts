@@ -112,29 +112,21 @@ export class FilesService {
       throw error;
     }
     try {
-      const row = await this.fileAssetRepo.save(
-        this.fileAssetRepo.create({
+      const rows = await this.dataSource.query<FileAssetRow[]>(
+        `INSERT INTO file_asset (id, object_key, original_name, mime_type, size_bytes, visibility, uploaded_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)
+         RETURNING id, original_name AS "originalName", mime_type AS "mimeType", size_bytes AS "sizeBytes", visibility, object_key AS "objectKey"`,
+        [
           id,
-          objectKey: key,
-          originalName:
-            file.originalname.replace(/^.*[\\/]/, '').slice(0, 255) || 'image',
-          mimeType: type.mime,
-          sizeBytes: file.buffer.length,
-          visibility: visibility as FileVisibility,
-          uploadedBy: userId,
-        }),
+          key,
+          file.originalname.replace(/^.*[\\/]/, '').slice(0, 255) || 'image',
+          type.mime,
+          file.buffer.length,
+          visibility,
+          userId,
+        ],
       );
-      return asset(
-        {
-          id: row.id,
-          originalName: row.originalName,
-          mimeType: row.mimeType,
-          sizeBytes: row.sizeBytes,
-          visibility: row.visibility,
-          objectKey: row.objectKey,
-        },
-        this.storage,
-      );
+      return asset(rows[0], this.storage);
     } catch (error) {
       try {
         await this.storage.remove(key);

@@ -19,11 +19,14 @@ const assetKey =
   /^(public|private)\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(jpg|png|webp|gif)$/i;
 
 async function cleanOrphans({ db, client, bucketName, cutoff }) {
-  const rows = await db
-    .createQueryBuilder()
-    .select('file.object_key', 'object_key')
-    .from('file_asset', 'file')
-    .getRawMany();
+  const result = typeof db.query === 'function'
+    ? await db.query('SELECT object_key FROM file_asset')
+    : await db
+        .createQueryBuilder()
+        .select('file.object_key', 'object_key')
+        .from('file_asset', 'file')
+        .getRawMany();
+  const rows = Array.isArray(result) ? result : (result.rows ?? result);
   const known = new Set(rows.map((row) => row.object_key));
   const orphanKeys = [];
   await new Promise((resolve, reject) => {

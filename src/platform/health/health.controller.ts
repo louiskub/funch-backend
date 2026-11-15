@@ -8,7 +8,7 @@ export class HealthController {
   @Get()
   async check() {
     try {
-      await this.dataSource.createQueryBuilder().select('1').getRawOne();
+      await this.dataSource.query('SELECT 1');
       return { status: 'ok' };
     } catch {
       throw new ServiceUnavailableException('Database unavailable');

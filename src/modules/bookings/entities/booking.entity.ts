@@ -1,6 +1,7 @@
-import { Column, Check, Entity, Index } from 'typeorm';
+import { Column, Check, Entity, Index, JoinColumn, ManyToOne } from 'typeorm';
 import { BaseEntity } from '../../../common/entities/base.entity';
 import { BookingStatus } from '../enums/booking-status.enum';
+import { Currency } from '../../catalog/entities/currency.entity';
 
 @Entity({ name: 'booking' })
 @Check('booking_interval_check', 'return_at > pickup_at')
@@ -32,6 +33,10 @@ export class Booking extends BaseEntity {
   status!: BookingStatus;
   @Column({ name: 'currency_code', type: 'char', length: 3 })
   currencyCode!: string;
+
+  @ManyToOne(() => Currency)
+  @JoinColumn({ name: 'currency_code', referencedColumnName: 'code' })
+  currency?: Currency;
   @Column({
     name: 'daily_rate_at_booking',
     type: 'numeric',

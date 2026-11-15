@@ -7,6 +7,19 @@ const id = (group: number, index: number) =>
 
 export const seedId = id;
 
+export const currencies = [
+  { code: 'AED', name: 'UAE Dirham', minorUnits: 2 },
+  { code: 'AUD', name: 'Australian Dollar', minorUnits: 2 },
+  { code: 'CAD', name: 'Canadian Dollar', minorUnits: 2 },
+  { code: 'GBP', name: 'Pound Sterling', minorUnits: 2 },
+  { code: 'JPY', name: 'Japanese Yen', minorUnits: 0 },
+  { code: 'KRW', name: 'South Korean Won', minorUnits: 0 },
+  { code: 'MYR', name: 'Malaysian Ringgit', minorUnits: 2 },
+  { code: 'SGD', name: 'Singapore Dollar', minorUnits: 2 },
+  { code: 'THB', name: 'Baht', minorUnits: 2 },
+  { code: 'USD', name: 'US Dollar', minorUnits: 2 },
+] as const;
+
 export const countries = [
   {
     id: id(1, 1),

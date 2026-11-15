@@ -285,11 +285,9 @@ export class BookingsService {
       const sessionRepo = manager.getRepository(UserSession);
       const offerRepo = manager.getRepository(CarTypeBranch);
 
-      await manager
-        .createQueryBuilder()
-        .select('pg_advisory_xact_lock(hashtext(:key))')
-        .setParameter('key', input.checkoutKey)
-        .getRawOne();
+      await manager.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [
+        input.checkoutKey,
+      ]);
       const existing = await bookingRepo
         .createQueryBuilder('b')
         .select([
@@ -354,11 +352,9 @@ export class BookingsService {
             'Sign in or provide all account fields to register and checkout',
           );
         const email = input.customerEmail.trim().toLowerCase();
-        await manager
-          .createQueryBuilder()
-          .select('pg_advisory_xact_lock(hashtext(:key))')
-          .setParameter('key', `account:${email}`)
-          .getRawOne();
+        await manager.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [
+          `account:${email}`,
+        ]);
         const accountExists = await userRepo
           .createQueryBuilder('u')
           .select('u.id')

@@ -1,5 +1,6 @@
-import { Column, Entity, Index, Unique } from 'typeorm';
+import { Column, Entity, Index, JoinColumn, ManyToOne, Unique } from 'typeorm';
 import { BaseEntity } from '../../../common/entities/base.entity';
+import { Currency } from '../../catalog/entities/currency.entity';
 
 @Entity({ name: 'car_type_branch' })
 @Unique(['carTypeId', 'branchId'])
@@ -20,8 +21,14 @@ export class CarTypeBranch extends BaseEntity {
     scale: 4,
   })
   baseHourlyRate!: string;
+
   @Column({ name: 'currency_code', type: 'char', length: 3 })
   currencyCode!: string;
+
+  @ManyToOne(() => Currency)
+  @JoinColumn({ name: 'currency_code', referencedColumnName: 'code' })
+  currency?: Currency;
+
   @Column({ name: 'is_active', type: 'boolean', default: true })
   isActive!: boolean;
 }

@@ -16,11 +16,11 @@
     "start:debug": "node --env-file-if-exists=.env ./node_modules/@nestjs/cli/bin/nest.js start --debug --watch",
     "start:prod": "node --env-file-if-exists=.env dist/main",
     "typeorm": "node --env-file-if-exists=.env -r ts-node/register ./node_modules/typeorm/cli.js -d src/platform/database/typeorm-data-source.ts",
-    "migration:generate": "npm run typeorm -- migration:generate",
+    "migration:generate": "npm run typeorm -- migration:generate src/platform/database/migrations/$npm_config_name",
+    "migration:create": "npm run typeorm -- migration:create src/platform/database/migrations/$npm_config_name",
     "migration:run": "npm run typeorm -- migration:run",
     "migration:revert": "npm run typeorm -- migration:revert",
     "migration:show": "npm run typeorm -- migration:show",
-    "migration:create": "node -r ts-node/register ./node_modules/typeorm/cli.js migration:create",
     "db:migrate": "node --env-file-if-exists=.env -r ts-node/register scripts/migrate.ts",
     "db:seed": "node --env-file-if-exists=.env -r ts-node/register scripts/seed.ts",
     "db:seed-demo": "node --env-file-if-exists=.env -r ts-node/register scripts/seed-demo.ts",
@@ -32,7 +32,7 @@
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
-    "test:e2e": "jest --config ./test/jest-e2e.json"
+    "test:e2e": "node --env-file-if-exists=.env.test ./node_modules/.bin/jest --config ./test/jest-e2e.json --runInBand"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",

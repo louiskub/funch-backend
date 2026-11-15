@@ -244,8 +244,8 @@ export class AdminFleetService {
       id: row.id,
       carTypeId: row.carTypeId,
       branchId: row.branchId,
-      baseDailyRate: String(row.baseDailyRate),
-      baseHourlyRate: String(row.baseHourlyRate),
+      baseDailyRate: Number(row.baseDailyRate).toFixed(4),
+      baseHourlyRate: Number(row.baseHourlyRate).toFixed(4),
       currencyCode: row.currencyCode,
       isActive: row.isActive,
     };

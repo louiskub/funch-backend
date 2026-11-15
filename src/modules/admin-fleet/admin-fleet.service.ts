@@ -119,6 +119,7 @@ export class AdminFleetService {
         'o.base_daily_rate::text AS "baseDailyRate"',
         'o.base_hourly_rate::text AS "baseHourlyRate"',
         'o.currency_code AS "currencyCode"',
+        'o.supported_option_ids AS "supportedOptionIds"',
         'o.is_active AS "isActive"',
       ])
       .innerJoin('car_type', 't', 't.id = o.car_type_id')
@@ -140,6 +141,7 @@ export class AdminFleetService {
             baseDailyRate: input.baseDailyRate,
             baseHourlyRate: input.baseHourlyRate,
             currencyCode: input.currencyCode,
+            supportedOptionIds: input.supportedOptionIds ?? [],
           }),
         ),
       );
@@ -168,14 +170,54 @@ export class AdminFleetService {
         'c.year AS year',
         'c.buy_date::text AS "buyDate"',
         'c.status AS status',
+        'CASE WHEN bk.id IS NOT NULL THEN true ELSE false END AS "inUse"',
+        'bk.booking_number AS "activeBookingNumber"',
+        'bk.pickup_at AS "activePickupAt"',
+        'bk.return_at AS "activeReturnAt"',
       ])
       .innerJoin('car_type_branch', 'o', 'o.id = c.car_type_branch_id')
       .innerJoin('car_type', 't', 't.id = o.car_type_id')
       .innerJoin('branch', 'b', 'b.id = o.branch_id')
+      .leftJoin(
+        'booking',
+        'bk',
+        "bk.car_id = c.id AND bk.status = 'IN_USE' AND bk.actual_return_at IS NULL",
+      )
       .orderBy('b.name')
       .addOrderBy('t.brand')
       .addOrderBy('t.model')
       .addOrderBy('c.license_plate')
+      .getRawMany();
+  }
+
+  async carHistory(carId: string) {
+    const car = await this.carRepo.findOneBy({ id: carId });
+    if (!car) throw new NotFoundException('Car not found');
+
+    return this.carRepo.manager
+      .createQueryBuilder()
+      .select([
+        'b.id AS id',
+        'b.booking_number AS "bookingNumber"',
+        'b.status AS status',
+        'b.pickup_at AS "pickupAt"',
+        'b.return_at AS "returnAt"',
+        'b.actual_return_at AS "actualReturnAt"',
+        'b.total_amount::text AS "totalAmount"',
+        'b.currency_code AS "currencyCode"',
+        'u.name AS "customerName"',
+        'u.email AS "customerEmail"',
+        'u.phone AS "customerPhone"',
+        'pb.name AS "pickupBranchName"',
+        'rb.name AS "returnBranchName"',
+        'b.created_at AS "createdAt"',
+      ])
+      .from('booking', 'b')
+      .leftJoin('app_user', 'u', 'u.id = b.user_id')
+      .leftJoin('branch', 'pb', 'pb.id = b.pickup_branch_id')
+      .leftJoin('branch', 'rb', 'rb.id = b.return_branch_id')
+      .where('b.car_id = :carId', { carId })
+      .orderBy('b.pickup_at', 'DESC')
       .getRawMany();
   }
 
@@ -203,6 +245,30 @@ export class AdminFleetService {
     return this.updateEntity(this.carRepo, id, input, (row) =>
       this.carResponse(row),
     );
+  }
+
+  async deleteCar(id: string) {
+    const car = await this.carRepo.findOneBy({ id });
+    if (!car) throw new NotFoundException('Car not found');
+
+    const activeBooking = await this.carRepo.manager
+      .createQueryBuilder()
+      .select(['b.booking_number AS "bookingNumber"'])
+      .from('booking', 'b')
+      .where(
+        "b.car_id = :id AND b.status = 'IN_USE' AND b.actual_return_at IS NULL",
+        { id },
+      )
+      .getRawOne<{ bookingNumber: string }>();
+
+    if (activeBooking) {
+      throw new BadRequestException(
+        `Cannot delete vehicle ${car.licensePlate} while it is currently in an active rental (Booking #${activeBooking.bookingNumber}).`,
+      );
+    }
+
+    await this.carRepo.delete(id);
+    return { id, deleted: true };
   }
 
   private async updateEntity<T extends CarType | CarTypeBranch | Car>(
@@ -247,6 +313,7 @@ export class AdminFleetService {
       baseDailyRate: Number(row.baseDailyRate).toFixed(4),
       baseHourlyRate: Number(row.baseHourlyRate).toFixed(4),
       currencyCode: row.currencyCode,
+      supportedOptionIds: row.supportedOptionIds ?? [],
       isActive: row.isActive,
     };
   }

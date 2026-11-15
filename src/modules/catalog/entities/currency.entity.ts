@@ -1,5 +1,4 @@
 import { Check, Column, Entity, PrimaryColumn } from 'typeorm';
-import { BaseTimestampEntity } from '../../../common/entities/base.entity';
 
 @Entity({ name: 'currency' })
 @Check('currency_code_check', "code ~ '^[A-Z]{3}$'")

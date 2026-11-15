@@ -6,27 +6,48 @@ import {
   HttpStatus,
   Logger,
 } from '@nestjs/common';
-import type { Response } from 'express';
+import type { Request, Response } from 'express';
 import { STATUS_CODES } from 'node:http';
+import { REQUEST_ID_HEADER } from '../middleware/correlation-id.middleware';
 
 @Catch()
 export class GlobalExceptionFilter implements ExceptionFilter {
   private readonly logger = new Logger(GlobalExceptionFilter.name);
 
   catch(exception: unknown, host: ArgumentsHost): void {
-    const response = host.switchToHttp().getResponse<Response>();
+    const ctx = host.switchToHttp();
+    const response = ctx.getResponse<Response>();
+    const request = ctx.getRequest<Request>();
     const code =
       exception instanceof HttpException
         ? exception.getStatus()
         : HttpStatus.INTERNAL_SERVER_ERROR;
     let messages = STATUS_CODES[code] ?? 'Request failed';
 
+    const rawReqId =
+      request?.headers?.[REQUEST_ID_HEADER] ??
+      (response?.getHeader?.(REQUEST_ID_HEADER) as
+        string | string[] | undefined);
+    const reqId =
+      typeof rawReqId === 'string'
+        ? rawReqId
+        : Array.isArray(rawReqId)
+          ? rawReqId[0]
+          : undefined;
+
+    if (reqId && !response.headersSent) {
+      response.setHeader(REQUEST_ID_HEADER, reqId);
+    }
+
     if (code >= 500) {
       messages = 'Internal server error';
+      const prefix = reqId ? `[${reqId}] ` : '';
       this.logger.error(
-        exception instanceof Error
-          ? (exception.stack ?? exception.message)
-          : 'Unhandled server error',
+        `${prefix}${
+          exception instanceof Error
+            ? (exception.stack ?? exception.message)
+            : 'Unhandled server error'
+        }`,
       );
     } else if (exception instanceof HttpException) {
       const body = exception.getResponse();

@@ -5,12 +5,20 @@ function setting(name: string, fallback: string): string {
 }
 
 export default function configFactory() {
+  const isTest = process.env.NODE_ENV === 'test';
   return {
     app: {
       env: process.env.NODE_ENV ?? 'development',
       port: Number(process.env.PORT ?? 3001),
       timezone: process.env.TZ,
       frontendOrigin: process.env.FRONTEND_ORIGIN ?? 'http://localhost:3000',
+    },
+    throttle: {
+      ttl: Number(process.env.THROTTLE_TTL ?? 60000),
+      limit: Number(process.env.THROTTLE_LIMIT ?? (isTest ? 1000 : 100)),
+      authLimit: Number(
+        process.env.THROTTLE_AUTH_LIMIT ?? (isTest ? 1000 : 10),
+      ),
     },
     database: {
       postgres: {

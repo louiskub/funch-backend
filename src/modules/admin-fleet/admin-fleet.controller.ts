@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -58,6 +59,9 @@ export class AdminFleetController {
   @Get('cars') cars() {
     return this.fleet.cars();
   }
+  @Get('cars/:id/history') carHistory(@Param() { id }: IdParams) {
+    return this.fleet.carHistory(id);
+  }
   @Post('cars') createCar(@Body() body: CarDto) {
     return this.fleet.createCar(body);
   }
@@ -66,5 +70,8 @@ export class AdminFleetController {
     @Body() body: UpdateCarDto,
   ) {
     return this.fleet.updateCar(id, body);
+  }
+  @Delete('cars/:id') deleteCar(@Param() { id }: IdParams) {
+    return this.fleet.deleteCar(id);
   }
 }

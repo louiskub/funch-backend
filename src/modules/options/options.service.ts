@@ -119,6 +119,31 @@ export class OptionsService {
     }
   }
 
+  async delete(optionId: string) {
+    const option = await this.carOptionRepo.findOneBy({ id: optionId });
+    if (!option) throw new NotFoundException('Option not found');
+
+    const activeBooking = await this.carOptionRepo.manager
+      .createQueryBuilder()
+      .select(['b.booking_number AS "bookingNumber"'])
+      .from('booking_option', 'bo')
+      .innerJoin('booking', 'b', 'b.id = bo.booking_id')
+      .where(
+        "bo.car_option_id = :optionId AND b.status IN ('IN_USE', 'CONFIRMED')",
+        { optionId },
+      )
+      .getRawOne<{ bookingNumber: string }>();
+
+    if (activeBooking) {
+      throw new BadRequestException(
+        `Cannot delete option "${option.name}" because it is reserved in active booking #${activeBooking.bookingNumber}. Deactivate it instead.`,
+      );
+    }
+
+    await this.carOptionRepo.delete(optionId);
+    return { id: optionId, deleted: true };
+  }
+
   private mapConstraintError(error: unknown): never {
     if (typeof error === 'object' && error !== null) {
       const driverError = Reflect.get(error, 'driverError');

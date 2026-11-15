@@ -128,6 +128,7 @@ export class BookingsService {
         'o.base_hourly_rate::text AS hourly',
         'o.base_daily_rate::text AS daily',
         'o.currency_code AS currency',
+        'o.supported_option_ids AS "supportedOptionIds"',
         'b.timezone AS timezone',
       ])
       .innerJoin('branch', 'b', 'b.id = o.branch_id')
@@ -176,6 +177,15 @@ export class BookingsService {
         throw new BadRequestException(
           'An option is unavailable at this branch',
         );
+      if (
+        Array.isArray(offer.supportedOptionIds) &&
+        offer.supportedOptionIds.length > 0 &&
+        !offer.supportedOptionIds.includes(item.carOptionId)
+      ) {
+        throw new BadRequestException(
+          'An option is not supported for this vehicle model',
+        );
+      }
       if (option.quantityStock !== null && item.quantity > option.quantityStock)
         throw new BadRequestException(
           `${item.carOptionId} exceeds available stock`,
@@ -681,9 +691,12 @@ export class BookingsService {
         'b.currency_code AS "currencyCode"',
         'u.name AS "customerName"',
         'u.email AS "customerEmail"',
+        'u.phone AS "customerPhone"',
         't.brand AS brand',
         't.model AS model',
         'br.name AS "branchName"',
+        'br.id AS "branchId"',
+        'br.timezone AS timezone',
       ])
       .innerJoin('app_user', 'u', 'u.id = b.user_id')
       .innerJoin('car_type_branch', 'o', 'o.id = b.car_type_branch_id')
@@ -702,9 +715,12 @@ export class BookingsService {
       currencyCode: string;
       customerName: string;
       customerEmail: string;
+      customerPhone: string;
       brand: string;
       model: string;
       branchName: string;
+      branchId: string;
+      timezone: string;
     }>();
     if (!bookings.length) return bookings;
     const charges = await this.additionalChargeRepo
@@ -954,7 +970,7 @@ export class BookingsService {
       .getRawOne<{ carTypeBranchId: string }>();
     if (!booking)
       throw new ConflictException('Booking is not ready for pickup');
-    return this.carRepo
+    const cars = await this.carRepo
       .createQueryBuilder('c')
       .select([
         'c.id AS id',
@@ -967,7 +983,19 @@ export class BookingsService {
         carTypeBranchId: booking.carTypeBranchId,
       })
       .orderBy('c.license_plate')
-      .getRawMany();
+      .getRawMany<{
+        id: string;
+        licensePlate: string;
+        status: string;
+        isOutOnRent: boolean;
+        readyAt: Date | number;
+      }>();
+    // PostgreSQL parses -infinity as a number, which JSON would silently turn into null.
+    return cars.map((car) => ({
+      ...car,
+      readyAt:
+        car.readyAt === Number.NEGATIVE_INFINITY ? '-infinity' : car.readyAt,
+    }));
   }
 
   private async carReadyAt(manager: EntityManager, carId: string) {
@@ -1379,7 +1407,9 @@ export class BookingsService {
         'u.email AS email',
         'u.phone AS phone',
         'u.is_suspended AS "isSuspended"',
+        'u.created_at AS "createdAt"',
         'count(b.id)::int AS "bookingCount"',
+        "count(CASE WHEN b.status IN ('PENDING', 'APPROVED', 'IN_USE') THEN 1 END)::int AS \"activeBookingCount\"",
       ])
       .leftJoin('booking', 'b', 'b.user_id = u.id')
       .where("u.role = 'CUSTOMER'")

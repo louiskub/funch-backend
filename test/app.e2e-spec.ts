@@ -7,6 +7,7 @@ import {
   Logger,
   Post,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { IsInt } from 'class-validator';
 import request from 'supertest';
 import { App } from 'supertest/types';
@@ -30,6 +31,12 @@ class BootstrapProbeController {
   @Get('failure')
   fail(): never {
     throw new Error('Internal diagnostic detail');
+  }
+
+  @Throttle({ default: { limit: 2, ttl: 60000 } })
+  @Get('throttled')
+  throttled() {
+    return { limited: true };
   }
 }
 
@@ -107,6 +114,42 @@ describe('HTTP bootstrap (e2e)', () => {
     expect(logger).toHaveBeenCalledWith(
       expect.stringContaining('Internal diagnostic detail'),
     );
+  });
+
+  it('attaches and echoes X-Request-Id correlation headers', async () => {
+    const res1 = await request(app.getHttpServer())
+      .get('/api/health')
+      .expect(200);
+    expect(res1.headers['x-request-id']).toBeDefined();
+    expect(typeof res1.headers['x-request-id']).toBe('string');
+    expect(res1.headers['x-request-id'].length).toBeGreaterThan(0);
+
+    const customId = 'client-trace-12345';
+    const res2 = await request(app.getHttpServer())
+      .get('/api/health')
+      .set('x-request-id', customId)
+      .expect(200);
+    expect(res2.headers['x-request-id']).toBe(customId);
+  });
+
+  it('enforces rate limiting and returns 429 when threshold is exceeded', async () => {
+    await request(app.getHttpServer())
+      .get('/api/_bootstrap-test/throttled')
+      .expect(200);
+    await request(app.getHttpServer())
+      .get('/api/_bootstrap-test/throttled')
+      .expect(200);
+    const blocked = await request(app.getHttpServer())
+      .get('/api/_bootstrap-test/throttled')
+      .expect(429);
+    expect(blocked.body).toEqual({
+      status: {
+        code: 429,
+        messages: expect.stringContaining('Too Many Requests'),
+      },
+      data: null,
+    });
+    expect(blocked.headers['x-request-id']).toBeDefined();
   });
 
   afterEach(async () => {

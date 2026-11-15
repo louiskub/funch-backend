@@ -8,6 +8,7 @@ import {
   Res,
   UseGuards,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import type { Request, Response } from 'express';
 import { AuthService } from './auth.service';
 import { LoginDto, RegisterDto, UpdateProfileDto } from './dto/auth.dto';
@@ -36,6 +37,12 @@ function cookieToken(request: Request): string | undefined {
 export class AuthController {
   constructor(private readonly auth: AuthService) {}
 
+  @Throttle({
+    default: {
+      limit: configFactory().throttle.authLimit,
+      ttl: configFactory().throttle.ttl,
+    },
+  })
   @Post('register')
   async register(
     @Body() input: RegisterDto,
@@ -49,6 +56,12 @@ export class AuthController {
     return { user: session.user };
   }
 
+  @Throttle({
+    default: {
+      limit: configFactory().throttle.authLimit,
+      ttl: configFactory().throttle.ttl,
+    },
+  })
   @Post('login')
   async login(
     @Body() input: LoginDto,

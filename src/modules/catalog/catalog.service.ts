@@ -55,6 +55,7 @@ export class CatalogService {
         'o.base_hourly_rate::text AS "baseHourlyRate"',
         'o.base_daily_rate::text AS "baseDailyRate"',
         'o.currency_code AS "currencyCode"',
+        'o.supported_option_ids AS "supportedOptionIds"',
         'b.name AS "branchName"',
         'b.city AS city',
         'b.timezone AS timezone',

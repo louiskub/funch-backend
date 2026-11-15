@@ -439,6 +439,9 @@ describe('Booking API (isolated PostgreSQL)', () => {
           id: item.id,
           actualReturnAt: expect.any(String),
           finalAmount: expect.any(String),
+          customerPhone: expect.any(String),
+          branchId: expect.any(String),
+          timezone: expect.any(String),
         }),
       ]),
     );

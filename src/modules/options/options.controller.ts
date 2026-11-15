@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -57,5 +58,12 @@ export class OptionsController {
     @Body() input: UpdateOptionDto,
   ) {
     return this.options.update(optionId, input);
+  }
+
+  @Delete('admin/options/:optionId')
+  @UseGuards(SessionAuthGuard, RoleGuard)
+  @Roles(UserRole.ADMIN)
+  delete(@Param() { optionId }: OptionIdParams) {
+    return this.options.delete(optionId);
   }
 }

@@ -29,6 +29,14 @@ export class CarTypeBranch extends BaseEntity {
   @JoinColumn({ name: 'currency_code', referencedColumnName: 'code' })
   currency?: Currency;
 
+  @Column({
+    name: 'supported_option_ids',
+    type: 'uuid',
+    array: true,
+    default: '{}',
+  })
+  supportedOptionIds!: string[];
+
   @Column({ name: 'is_active', type: 'boolean', default: true })
   isActive!: boolean;
 }

@@ -70,6 +70,10 @@ export class OfferDto {
   @IsString() @Matches(decimal) baseDailyRate!: string;
   @IsString() @Matches(decimal) baseHourlyRate!: string;
   @IsString() @Matches(/^[A-Z]{3}$/) currencyCode!: string;
+  @ValidateIf((_, value: unknown) => value !== undefined)
+  @IsArray()
+  @IsUUID('4', { each: true })
+  supportedOptionIds?: string[];
 }
 
 export class UpdateOfferDto {
@@ -85,6 +89,10 @@ export class UpdateOfferDto {
   @IsString()
   @Matches(/^[A-Z]{3}$/)
   currencyCode?: string;
+  @ValidateIf((_, value: unknown) => value !== undefined)
+  @IsArray()
+  @IsUUID('4', { each: true })
+  supportedOptionIds?: string[];
   @ValidateIf((_, value: unknown) => value !== undefined)
   @IsBoolean()
   isActive?: boolean;

@@ -9,6 +9,7 @@ import { FilesModule } from './modules/files/files.module';
 import { HealthModule } from './platform/health/health.module';
 import { OptionsModule } from './modules/options/options.module';
 import { PlatformModule } from './platform/platform.module';
+import { BookingsModule } from './modules/bookings/bookings.module';
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { PlatformModule } from './platform/platform.module';
     AdminFleetModule,
     FilesModule,
     HealthModule,
+    BookingsModule,
   ],
   providers: [
     { provide: APP_INTERCEPTOR, useClass: ResponseFormatInterceptor },

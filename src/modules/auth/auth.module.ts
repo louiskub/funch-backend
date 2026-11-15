@@ -10,6 +10,6 @@ import { PasswordService } from './services/password.service';
   imports: [PlatformModule],
   controllers: [AuthController],
   providers: [AuthService, PasswordService, SessionAuthGuard, RoleGuard],
-  exports: [SessionAuthGuard, RoleGuard],
+  exports: [SessionAuthGuard, RoleGuard, PasswordService],
 })
 export class AuthModule {}

@@ -169,6 +169,38 @@ describe('Branch options API (isolated PostgreSQL)', () => {
     }
   });
 
+  it('preserves stock on unrelated edits and accepts explicit zero and unlimited stock', async () => {
+    const created = await create(adminCookie, {
+      branchId: branchThailand,
+      code: 'STOCK-REGRESSION',
+      name: 'Child seat',
+      category: 'EQUIPMENT',
+      pricingType: 'PER_UNIT_PER_DAY',
+      price: '100',
+      quantityStock: 5,
+    }).expect(201);
+    const optionId: string = created.body.data.id;
+
+    for (const scenario of [
+      { input: { price: '125' }, expectedStock: 5 },
+      { input: { isActive: false }, expectedStock: 5 },
+      { input: { quantityStock: 0 }, expectedStock: 0 },
+      { input: { name: 'Edited seat' }, expectedStock: 0 },
+      { input: { quantityStock: null }, expectedStock: null },
+      { input: { quantityStock: 3 }, expectedStock: 3 },
+    ]) {
+      await request(app.getHttpServer())
+        .patch(`/api/admin/options/${optionId}`)
+        .set('Cookie', adminCookie)
+        .set('Origin', origin)
+        .send(scenario.input)
+        .expect(200)
+        .expect(({ body }) =>
+          expect(body.data.quantityStock).toBe(scenario.expectedStock),
+        );
+    }
+  });
+
   it('rejects invalid amounts and stock, enforces branch code uniqueness, and keeps pricing type immutable', async () => {
     const valid = {
       branchId: branchThailand,

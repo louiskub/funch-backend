@@ -94,7 +94,7 @@ export class OptionsService {
           input.description,
           input.category,
           input.price,
-          Object.prototype.hasOwnProperty.call(input, 'quantityStock'),
+          input.quantityStock !== undefined,
           input.quantityStock ?? null,
           input.isActive,
         ],

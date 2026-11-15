@@ -208,7 +208,10 @@ export class AdminFleetService {
         );
       if (code === '23503')
         throw new BadRequestException(
-          'The selected car type, branch, or offer does not exist',
+          Reflect.get(driverError ?? error, 'constraint') ===
+            'car_type_branch_currency_code_fkey'
+            ? 'Currency code is not supported'
+            : 'The selected car type, branch, or offer does not exist',
         );
       if (code === '23514' || code === '22P02' || code === '22003')
         throw new BadRequestException(

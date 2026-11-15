@@ -290,6 +290,65 @@ describe('Admin fleet API (PostgreSQL)', () => {
     );
   });
 
+  it('validates offer currencies against the currency registry on create and update', async () => {
+    const type = await request(app.getHttpServer())
+      .post('/api/admin/fleet/car-types')
+      .set('Cookie', adminCookie)
+      .set('Origin', origin)
+      .send({
+        brand: `FleetCurrency${randomUUID()}`,
+        model: 'Currency test',
+        seats: 5,
+        transmission: 'AUTO',
+        fuelType: 'GASOLINE',
+        features: [],
+      })
+      .expect(201);
+    const input = {
+      carTypeId: id(object(type.text)),
+      branchId,
+      baseDailyRate: '100',
+      baseHourlyRate: '10',
+      currencyCode: 'THB',
+    };
+    await request(app.getHttpServer())
+      .post('/api/admin/fleet/offers')
+      .set('Cookie', adminCookie)
+      .set('Origin', origin)
+      .send({ ...input, currencyCode: 'ZZZ' })
+      .expect(400)
+      .expect(({ body }) =>
+        expect(body.status.messages).toBe('Currency code is not supported'),
+      );
+    const offer = await request(app.getHttpServer())
+      .post('/api/admin/fleet/offers')
+      .set('Cookie', adminCookie)
+      .set('Origin', origin)
+      .send(input)
+      .expect(201);
+    const offerId = id(object(offer.text));
+    await request(app.getHttpServer())
+      .patch(`/api/admin/fleet/offers/${offerId}`)
+      .set('Cookie', adminCookie)
+      .set('Origin', origin)
+      .send({ currencyCode: 'ZZZ' })
+      .expect(400);
+    await request(app.getHttpServer())
+      .get(`/api/offers/${offerId}`)
+      .expect(200)
+      .expect(({ body }) => expect(body.data.currencyCode).toBe('THB'));
+    await request(app.getHttpServer())
+      .post('/api/admin/fleet/offers')
+      .set('Cookie', adminCookie)
+      .set('Origin', origin)
+      .send({
+        ...input,
+        branchId: '20000000-0000-4000-8000-000000000002',
+        currencyCode: 'USD',
+      })
+      .expect(201);
+  });
+
   it('rejects duplicate identities, missing foreign keys, invalid ranges, and malformed IDs', async () => {
     const suffix = randomUUID().slice(0, 8);
     const input = {

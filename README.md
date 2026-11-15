@@ -12,6 +12,14 @@ npm run start:dev
 
 The compose project uses host port `15432` and a project-scoped volume. The `.env` file is loaded by the start, database, and admin-provision scripts; values already exported in the process take precedence. `db:setup` applies the timestamped TypeORM migrations and repeatable TypeScript seed. `db:migrate` and `db:seed` can be run separately. Configure `DATABASE_URL` for another database and set `DATABASE_SSL=true` when the server requires TLS; the default local URL is `postgres://car-rental:car-rental@localhost:15432/car-rental`.
 
+Use `npm run db:migrate` to upgrade an existing database. The seed inserts missing demo rows in one transaction and preserves existing country/branch details, gallery order, rates, activation flags, and car status. It is not a demo reset command.
+
+## Currency reference data
+
+`Currency` lives in `src/modules/catalog/entities/currency.entity.ts`. Its primary key is `code`, with `name` and `minorUnits` mapped to `minor_units`. Migration `20261115000100-Currency` creates the registry with THB and USD, both with two minor-unit decimal places, and adds foreign keys from `country.currency_code` and `car_type_branch.currency_code`. Unknown offer currencies return `400` on create or update. Minor-unit metadata does not change rental calculations or rounding.
+
+If an existing country or offer uses a code outside the registry, the migration fails transactionally instead of relabeling existing prices. Add approved currency metadata through a migration before adding more supported currencies. No Currency CRUD API or UI is included.
+
 ## HTTP bootstrap and API documentation
 
 The API keeps the `/api` prefix. Swagger UI is available at `/docs`, with the OpenAPI document at `/docs/json`. The document uses the title `FUNCH API` and describes session-cookie authentication through `funch_session`. The Swagger compiler plugin derives request schemas from the DTOs. JSON is served over HTTP without writing a file at startup.
@@ -77,17 +85,16 @@ npm run build
 npm run lint
 ```
 
-The end-to-end suites use the local PostgreSQL service. Catalog tests read the seeded `car-rental` database. Auth, admin fleet, options, and files tests each use a separate database (`funch_ticket03_test`, `funch_ticket04_test`, `funch_ticket06_test`, and `funch_ticket05_test`). Create missing test databases, migrate them without dropping existing databases, and seed the files database with the checked-in demo branch used by its fixtures:
+The end-to-end suites use isolated databases on the local PostgreSQL service. Catalog and health tests use `funch_ticket02_test`; auth, fleet, options, files, and reference-data tests have their own databases. Create missing databases and run the idempotent setup without dropping existing databases:
 
 ```sh
-for db in funch_ticket03_test funch_ticket04_test funch_ticket06_test funch_ticket05_test; do
+for db in funch_ticket02_test funch_ticket03_test funch_ticket04_test funch_ticket06_test funch_ticket05_test funch_reference_test; do
   docker exec -i funch-ticket02-postgres-1 psql -U car-rental -d car-rental -v ON_ERROR_STOP=1 -v db="$db" <<'SQL'
 SELECT format('CREATE DATABASE %I OWNER %I', :'db', 'car-rental')
 WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = :'db') \gexec
 SQL
-  DATABASE_URL="postgres://car-rental:car-rental@localhost:15432/$db" npm run db:migrate
+  DATABASE_URL="postgres://car-rental:car-rental@localhost:15432/$db" npm run db:setup
 done
-DATABASE_URL=postgres://car-rental:car-rental@localhost:15432/funch_ticket05_test npm run db:seed
 ```
 
 Start or refresh only the project's isolated MinIO service and its idempotent bucket/policy initializer (this does not touch PostgreSQL):
@@ -99,14 +106,17 @@ docker compose -p funch-ticket05 up -d minio minio-init
 Run the complete integration suite serially with explicit, isolated database URLs and bucket:
 
 ```sh
-DATABASE_URL=postgres://car-rental:car-rental@localhost:15432/car-rental \
+DATABASE_URL=postgres://car-rental:car-rental@localhost:15432/funch_ticket02_test \
 AUTH_TEST_DATABASE_URL=postgres://car-rental:car-rental@localhost:15432/funch_ticket03_test \
 ADMIN_TEST_DATABASE_URL=postgres://car-rental:car-rental@localhost:15432/funch_ticket04_test \
 OPTIONS_TEST_DATABASE_URL=postgres://car-rental:car-rental@localhost:15432/funch_ticket06_test \
 FILES_TEST_DATABASE_URL=postgres://car-rental:car-rental@localhost:15432/funch_ticket05_test \
+REFERENCE_TEST_DATABASE_URL=postgres://car-rental:car-rental@localhost:15432/funch_reference_test \
 FILES_TEST_BUCKET=funch-assets-ticket05-test \
 npm run test:e2e -- --runInBand
 ```
+
+The two existing Origin-protection assertions remain failing because Origin protection was explicitly excluded from the requested fixes. The guards and these assertions have not been weakened or disabled. Stock, currency, seed-preservation, and the other integration cases pass independently of that known exception.
 
 ## Production dependency audit
 

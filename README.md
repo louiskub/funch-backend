@@ -14,6 +14,18 @@ The compose project uses host port `15432` and a project-scoped volume. The `.en
 
 Use `npm run db:migrate` to upgrade an existing database. The seed inserts missing demo rows in one transaction and preserves existing country/branch details, gallery order, rates, activation flags, and car status. It is not a demo reset command.
 
+## Booking demo data
+
+Create an isolated PostgreSQL database named `funch_demo`, then run:
+
+```sh
+DEMO_DATABASE_URL=postgres://car-rental:car-rental@localhost:15432/funch_demo npm run db:seed-demo
+```
+
+The command refuses any other database name. It is repeatable and resets only the fixed demo accounts and bookings. It seeds customer and administrator accounts with `demo-customer@example.test` and `demo-admin@example.test`, both using the local-only password `FunchDemo2026!`. Demo bookings span two countries/currencies and include pending, approved, in-use, completed, cancelled, and rejected states; it also seeds one-stock child seats and a confirmed damage charge. Price snapshots are created through the core pricing functions.
+
+Suggested two-session walkthrough: sign in as the customer, quote an offer with a child seat, submit a pending request, and inspect the pending warning; sign in as the administrator, approve a request, assign the matching branch car at pickup, record a return, confirm any additional charge, inspect member history, then open reports filtered to the booking creation dates. The automated booking API suite covers quote and checkout idempotency, owner checks, approval races for the last car and shared option stock, pickup time and no-show handling, cancellation, return charge idempotency, cooldown conflicts, member suspension, and report totals. Run it against the dedicated `funch_booking_test` database with `BOOKING_TEST_DATABASE_URL`.
+
 ## Currency reference data
 
 `Currency` lives in `src/modules/catalog/entities/currency.entity.ts`. Its primary key is `code`, with `name` and `minorUnits` mapped to `minor_units`. Migration `20261115000100-Currency` creates the registry with THB and USD, both with two minor-unit decimal places, and adds foreign keys from `country.currency_code` and `car_type_branch.currency_code`. Unknown offer currencies return `400` on create or update. Minor-unit metadata does not change rental calculations or rounding.

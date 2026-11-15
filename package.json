@@ -17,6 +17,7 @@
     "start:prod": "node --env-file-if-exists=.env dist/main",
     "db:migrate": "node --env-file-if-exists=.env -r ts-node/register scripts/migrate.ts",
     "db:seed": "node --env-file-if-exists=.env -r ts-node/register scripts/seed.ts",
+    "db:seed-demo": "node --env-file-if-exists=.env -r ts-node/register scripts/seed-demo.ts",
     "db:setup": "npm run db:migrate && npm run db:seed",
     "admin:provision": "npm run build && node --env-file-if-exists=.env scripts/provision-admin.cjs",
     "files:cleanup-orphans": "npm run build && node --env-file-if-exists=.env scripts/cleanup-orphan-assets.cjs",

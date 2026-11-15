@@ -8,6 +8,7 @@ function decision(allowed: boolean, reason: string): PolicyDecision {
 export interface CalculateReadyAtInput {
   returnAt: IsoInstant;
   actualReturnAt: IsoInstant | null;
+  now?: IsoInstant;
 }
 
 export interface CalculateReadyAtResult {
@@ -17,12 +18,27 @@ export interface CalculateReadyAtResult {
 export function calculateReadyAt(
   input: CalculateReadyAtInput,
 ): CalculateReadyAtResult {
-  const returnedAt = parseIsoInstant(input.actualReturnAt ?? input.returnAt);
+  if (input.actualReturnAt !== null) {
+    return {
+      readyAt: parseIsoInstant(input.actualReturnAt)
+        .plus({ hours: 1 })
+        .toUTC()
+        .toISO({ suppressMilliseconds: true })!,
+    };
+  }
+
+  const scheduledReady = parseIsoInstant(input.returnAt).plus({ hours: 2 });
+  if (input.now) {
+    const rollingReady = parseIsoInstant(input.now).plus({ hours: 2 });
+    if (rollingReady > scheduledReady) {
+      return {
+        readyAt: rollingReady.toUTC().toISO({ suppressMilliseconds: true })!,
+      };
+    }
+  }
+
   return {
-    readyAt: returnedAt
-      .plus(input.actualReturnAt === null ? { hours: 2 } : { hours: 1 })
-      .toUTC()
-      .toISO({ suppressMilliseconds: true })!,
+    readyAt: scheduledReady.toUTC().toISO({ suppressMilliseconds: true })!,
   };
 }
 

@@ -4,8 +4,13 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
 import { randomUUID } from 'node:crypto';
-import { DataSource } from 'typeorm';
+import { FindOptionsWhere, Repository } from 'typeorm';
+import { Branch } from '../catalog/entities/branch.entity';
+import { Car } from './entities/car.entity';
+import { CarType } from './entities/car-type.entity';
+import { CarTypeBranch } from './entities/car-type-branch.entity';
 import type {
   CarDto,
   CarTypeDto,
@@ -15,32 +20,22 @@ import type {
   UpdateOfferDto,
 } from './dto/admin-fleet.dto';
 
-const fields = {
-  brand: 'brand',
-  model: 'model',
-  seats: 'seats',
-  transmission: 'transmission',
-  fuelType: 'fuel_type',
-  features: 'features',
-  isActive: 'is_active',
-  baseDailyRate: 'base_daily_rate',
-  baseHourlyRate: 'base_hourly_rate',
-  currencyCode: 'currency_code',
-  carTypeBranchId: 'car_type_branch_id',
-  vin: 'vin',
-  licensePlate: 'license_plate',
-  year: 'year',
-  buyDate: 'buy_date',
-  status: 'status',
-} as const;
-
 @Injectable()
 export class AdminFleetService {
-  constructor(private readonly dataSource: DataSource) {}
+  constructor(
+    @InjectRepository(Car)
+    private readonly carRepo: Repository<Car>,
+    @InjectRepository(CarType)
+    private readonly carTypeRepo: Repository<CarType>,
+    @InjectRepository(CarTypeBranch)
+    private readonly offerRepo: Repository<CarTypeBranch>,
+    @InjectRepository(Branch)
+    private readonly branchRepo: Repository<Branch>,
+  ) {}
 
   async branches() {
-    return this.dataSource
-      .createQueryBuilder()
+    return this.branchRepo
+      .createQueryBuilder('b')
       .select([
         'b.id AS id',
         'b.code AS code',
@@ -50,7 +45,6 @@ export class AdminFleetService {
         'c.code AS "countryCode"',
         'c.currency_code AS "currencyCode"',
       ])
-      .from('branch', 'b')
       .innerJoin('country', 'c', 'c.id = b.country_id')
       .orderBy('c.name')
       .addOrderBy('b.name')
@@ -58,54 +52,62 @@ export class AdminFleetService {
   }
 
   async carTypes() {
-    return this.dataSource
-      .createQueryBuilder()
-      .select([
-        't.id AS id',
-        't.brand AS brand',
-        't.model AS model',
-        't.seats AS seats',
-        't.transmission AS transmission',
-        't.fuel_type AS "fuelType"',
-        't.features AS features',
-        't.image_file_ids AS "imageFileIds"',
-        't.is_active AS "isActive"',
-      ])
-      .from('car_type', 't')
-      .orderBy('t.brand')
-      .addOrderBy('t.model')
-      .getRawMany();
-  }
-
-  async createCarType(input: CarTypeDto) {
-    return this.insert(
-      'car_type',
-      {
-        id: randomUUID(),
-        brand: input.brand.trim(),
-        model: input.model.trim(),
-        seats: input.seats,
-        transmission: input.transmission,
-        fuel_type: input.fuelType,
-        features: input.features,
-      },
-      'id, brand, model, seats, transmission, fuel_type AS "fuelType", features, is_active AS "isActive"',
+    const rows = await this.carTypeRepo.find({
+      order: { brand: 'ASC', model: 'ASC' },
+    });
+    return rows.map(
+      ({
+        id,
+        brand,
+        model,
+        seats,
+        transmission,
+        fuelType,
+        features,
+        imageFileIds,
+        isActive,
+      }) => ({
+        id,
+        brand,
+        model,
+        seats,
+        transmission,
+        fuelType,
+        features,
+        imageFileIds,
+        isActive,
+      }),
     );
   }
 
+  async createCarType(input: CarTypeDto) {
+    try {
+      const row = await this.carTypeRepo.save(
+        this.carTypeRepo.create({
+          id: randomUUID(),
+          brand: input.brand.trim(),
+          model: input.model.trim(),
+          seats: input.seats,
+          transmission: input.transmission,
+          fuelType: input.fuelType,
+          features: input.features,
+        }),
+      );
+      return this.carTypeResponse(row);
+    } catch (error) {
+      this.translate(error);
+    }
+  }
+
   async updateCarType(id: string, input: UpdateCarTypeDto) {
-    return this.update(
-      'car_type',
-      id,
-      input,
-      fields,
-      'id, brand, model, seats, transmission, fuel_type AS "fuelType", features, is_active AS "isActive"',
+    return this.updateEntity(this.carTypeRepo, id, input, (row) =>
+      this.carTypeResponse(row),
     );
   }
 
   async offers() {
-    return this.dataSource
-      .createQueryBuilder()
+    return this.offerRepo
+      .createQueryBuilder('o')
       .select([
         'o.id AS id',
         'o.car_type_id AS "carTypeId"',
@@ -119,7 +121,6 @@ export class AdminFleetService {
         'o.currency_code AS "currencyCode"',
         'o.is_active AS "isActive"',
       ])
-      .from('car_type_branch', 'o')
       .innerJoin('car_type', 't', 't.id = o.car_type_id')
       .innerJoin('branch', 'b', 'b.id = o.branch_id')
       .orderBy('b.name')
@@ -129,33 +130,33 @@ export class AdminFleetService {
   }
 
   async createOffer(input: OfferDto) {
-    return this.insert(
-      'car_type_branch',
-      {
-        id: randomUUID(),
-        car_type_id: input.carTypeId,
-        branch_id: input.branchId,
-        base_daily_rate: input.baseDailyRate,
-        base_hourly_rate: input.baseHourlyRate,
-        currency_code: input.currencyCode,
-      },
-      'id, car_type_id AS "carTypeId", branch_id AS "branchId", base_daily_rate::text AS "baseDailyRate", base_hourly_rate::text AS "baseHourlyRate", currency_code AS "currencyCode", is_active AS "isActive"',
-    );
+    try {
+      return this.offerResponse(
+        await this.offerRepo.save(
+          this.offerRepo.create({
+            id: randomUUID(),
+            carTypeId: input.carTypeId,
+            branchId: input.branchId,
+            baseDailyRate: input.baseDailyRate,
+            baseHourlyRate: input.baseHourlyRate,
+            currencyCode: input.currencyCode,
+          }),
+        ),
+      );
+    } catch (error) {
+      this.translate(error);
+    }
   }
 
   async updateOffer(id: string, input: UpdateOfferDto) {
-    return this.update(
-      'car_type_branch',
-      id,
-      input,
-      fields,
-      'id, car_type_id AS "carTypeId", branch_id AS "branchId", base_daily_rate::text AS "baseDailyRate", base_hourly_rate::text AS "baseHourlyRate", currency_code AS "currencyCode", is_active AS "isActive"',
+    return this.updateEntity(this.offerRepo, id, input, (row) =>
+      this.offerResponse(row),
     );
   }
 
   async cars() {
-    return this.dataSource
-      .createQueryBuilder()
+    return this.carRepo
+      .createQueryBuilder('c')
       .select([
         'c.id AS id',
         'c.car_type_branch_id AS "carTypeBranchId"',
@@ -168,7 +169,6 @@ export class AdminFleetService {
         'c.buy_date::text AS "buyDate"',
         'c.status AS status',
       ])
-      .from('car', 'c')
       .innerJoin('car_type_branch', 'o', 'o.id = c.car_type_branch_id')
       .innerJoin('car_type', 't', 't.id = o.car_type_id')
       .innerJoin('branch', 'b', 'b.id = o.branch_id')
@@ -180,88 +180,87 @@ export class AdminFleetService {
   }
 
   async createCar(input: CarDto) {
-    return this.insert(
-      'car',
-      {
-        id: randomUUID(),
-        car_type_branch_id: input.carTypeBranchId,
-        vin: input.vin.trim(),
-        license_plate: input.licensePlate.trim(),
-        year: input.year,
-        buy_date: input.buyDate ?? null,
-        status: input.status,
-      },
-      'id, car_type_branch_id AS "carTypeBranchId", vin, license_plate AS "licensePlate", year, buy_date::text AS "buyDate", status',
-    );
+    try {
+      return this.carResponse(
+        await this.carRepo.save(
+          this.carRepo.create({
+            id: randomUUID(),
+            carTypeBranchId: input.carTypeBranchId,
+            vin: input.vin.trim(),
+            licensePlate: input.licensePlate.trim(),
+            year: input.year,
+            buyDate: input.buyDate ?? null,
+            status: input.status,
+          }),
+        ),
+      );
+    } catch (error) {
+      this.translate(error);
+    }
   }
 
   async updateCar(id: string, input: UpdateCarDto) {
-    return this.update(
-      'car',
-      id,
-      input,
-      fields,
-      'id, car_type_branch_id AS "carTypeBranchId", vin, license_plate AS "licensePlate", year, buy_date::text AS "buyDate", status',
+    return this.updateEntity(this.carRepo, id, input, (row) =>
+      this.carResponse(row),
     );
   }
 
-  private async insert(
-    table: string,
-    values: Record<string, unknown>,
-    returning: string,
-  ) {
-    try {
-      const result = await this.dataSource
-        .createQueryBuilder()
-        .insert()
-        .into(table)
-        .values(values)
-        .returning(returning)
-        .execute();
-      return result.raw[0] as Record<string, unknown>;
-    } catch (error) {
-      this.translate(error);
-    }
-  }
-
-  private async update(
-    table: 'car_type' | 'car_type_branch' | 'car',
+  private async updateEntity<T extends CarType | CarTypeBranch | Car>(
+    repo: Repository<T>,
     id: string,
     input: object,
-    columns: typeof fields,
-    returning: string,
+    map: (row: T) => Record<string, unknown>,
   ) {
-    const entries: [string, unknown][] = [];
-    for (const key in input) {
-      if (Object.hasOwn(input, key))
-        entries.push([key, Reflect.get(input, key)]);
-    }
-    const filtered = entries.filter(
-      ([key, value]) => key in columns && value !== undefined,
-    );
-    if (!filtered.length)
-      throw new BadRequestException('Provide at least one field to update');
     const values = Object.fromEntries(
-      filtered.map(([key, value]) => [
-        columns[key as keyof typeof columns],
-        value,
-      ]),
+      Object.entries(input).filter(([, value]) => value !== undefined),
     );
-    if (table === 'car_type' && filtered.some(([key]) => key !== 'isActive'))
-      Object.assign(values, { updated_at: () => 'now()' });
+    if (!Object.keys(values).length)
+      throw new BadRequestException('Provide at least one field to update');
     try {
-      const result = await this.dataSource
-        .createQueryBuilder()
-        .update(table)
-        .set(values)
-        .where('id = :id', { id })
-        .returning(returning)
-        .execute();
-      if (!result.raw[0]) throw new NotFoundException('Record not found');
-      return result.raw[0] as Record<string, unknown>;
+      const row = await repo.findOneBy({ id } as FindOptionsWhere<T>);
+      if (!row) throw new NotFoundException('Record not found');
+      Object.assign(row, values);
+      return map(await repo.save(row));
     } catch (error) {
       this.translate(error);
     }
+  }
+
+  private carTypeResponse(row: CarType) {
+    return {
+      id: row.id,
+      brand: row.brand,
+      model: row.model,
+      seats: row.seats,
+      transmission: row.transmission,
+      fuelType: row.fuelType,
+      features: row.features,
+      isActive: row.isActive,
+    };
+  }
+
+  private offerResponse(row: CarTypeBranch) {
+    return {
+      id: row.id,
+      carTypeId: row.carTypeId,
+      branchId: row.branchId,
+      baseDailyRate: String(row.baseDailyRate),
+      baseHourlyRate: String(row.baseHourlyRate),
+      currencyCode: row.currencyCode,
+      isActive: row.isActive,
+    };
+  }
+
+  private carResponse(row: Car) {
+    return {
+      id: row.id,
+      carTypeBranchId: row.carTypeBranchId,
+      vin: row.vin,
+      licensePlate: row.licensePlate,
+      year: row.year,
+      buyDate: row.buyDate,
+      status: row.status,
+    };
   }
 
   private translate(error: unknown): never {

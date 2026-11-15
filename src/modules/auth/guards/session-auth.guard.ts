@@ -5,8 +5,9 @@ import {
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'node:crypto';
-import { DataSource } from 'typeorm';
+import { Repository } from 'typeorm';
 import { SESSION_COOKIE } from '../constants/session.constants';
 import type { AuthenticatedRequest, AuthUser } from '../types/auth.types';
 import { UserSession } from '../entities/user-session.entity';
@@ -24,22 +25,24 @@ function sessionToken(request: AuthenticatedRequest): string | undefined {
 
 @Injectable()
 export class SessionAuthGuard implements CanActivate {
-  constructor(private readonly dataSource: DataSource) {}
+  constructor(
+    @InjectRepository(UserSession)
+    private readonly sessionRepo: Repository<UserSession>,
+  ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
     const token = sessionToken(request);
     if (!token) throw new UnauthorizedException();
     const tokenHash = createHash('sha256').update(token).digest('hex');
-    const sessions = this.dataSource.getRepository(UserSession);
-    const session = await sessions.findOne({
+    const session = await this.sessionRepo.findOne({
       where: { tokenHash },
       relations: { user: true },
     });
     if (!session || session.revokedAt) throw new UnauthorizedException();
     if (session.expiresAt <= new Date()) {
       session.revokedAt = new Date();
-      await sessions.save(session);
+      await this.sessionRepo.save(session);
       throw new UnauthorizedException();
     }
     if (session.user.isSuspended)

@@ -1,8 +1,9 @@
 import { Column, Entity, JoinColumn, ManyToOne, PrimaryColumn } from 'typeorm';
+import { BaseTimestampEntity } from '../../../common/entities/base.entity';
 import { AppUser } from './app-user.entity';
 
 @Entity({ name: 'user_session' })
-export class UserSession {
+export class UserSession extends BaseTimestampEntity {
   @PrimaryColumn({ name: 'token_hash', type: 'char', length: 64 })
   tokenHash!: string;
 

@@ -1,6 +1,6 @@
 import {
   IsBoolean,
-  IsIn,
+  IsEnum,
   IsInt,
   IsOptional,
   IsString,
@@ -10,9 +10,8 @@ import {
   Max,
   Min,
 } from 'class-validator';
-
-const categories = ['EQUIPMENT', 'SERVICE', 'PROTECTION'] as const;
-const pricingTypes = ['PER_DAY', 'PER_UNIT_PER_DAY', 'FIXED'] as const;
+import { CarOptionCategory } from '../enums/car-option-category.enum';
+import { CarOptionPricingType } from '../enums/car-option-pricing-type.enum';
 
 export class BranchOptionParams {
   @IsUUID()
@@ -42,11 +41,11 @@ export class CreateOptionDto {
   @Length(0, 1000)
   description?: string;
 
-  @IsIn(categories)
-  category!: (typeof categories)[number];
+  @IsEnum(CarOptionCategory)
+  category!: CarOptionCategory;
 
-  @IsIn(pricingTypes)
-  pricingType!: (typeof pricingTypes)[number];
+  @IsEnum(CarOptionPricingType)
+  pricingType!: CarOptionPricingType;
 
   @IsString()
   @Matches(/^(?:0|[1-9]\d{0,9})(?:\.\d{1,4})?$/)
@@ -77,12 +76,12 @@ export class UpdateOptionDto {
   description?: string;
 
   @IsOptional()
-  @IsIn(categories)
-  category?: (typeof categories)[number];
+  @IsEnum(CarOptionCategory)
+  category?: CarOptionCategory;
 
   @IsOptional()
-  @IsIn(pricingTypes)
-  pricingType?: (typeof pricingTypes)[number];
+  @IsEnum(CarOptionPricingType)
+  pricingType?: CarOptionPricingType;
 
   @IsOptional()
   @IsString()

@@ -3,8 +3,9 @@ import {
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { DataSource, IsNull } from 'typeorm';
+import { DataSource, IsNull, Repository } from 'typeorm';
 import type { AuthUser } from './types/auth.types';
 import { LoginDto, RegisterDto, UpdateProfileDto } from './dto/auth.dto';
 import { AppUser } from './entities/app-user.entity';
@@ -23,6 +24,10 @@ function isUniqueViolation(error: unknown): boolean {
 @Injectable()
 export class AuthService {
   constructor(
+    @InjectRepository(AppUser)
+    private readonly userRepo: Repository<AppUser>,
+    @InjectRepository(UserSession)
+    private readonly sessionRepo: Repository<UserSession>,
     private readonly dataSource: DataSource,
     private readonly passwords: PasswordService,
   ) {}
@@ -65,8 +70,7 @@ export class AuthService {
   }
 
   async login(input: LoginDto) {
-    const user = await this.dataSource
-      .getRepository(AppUser)
+    const user = await this.userRepo
       .createQueryBuilder('user')
       .addSelect('user.passwordHash')
       .where('user.email = :email', {
@@ -85,12 +89,10 @@ export class AuthService {
 
   async logout(token: string | undefined): Promise<void> {
     if (!token) return;
-    await this.dataSource
-      .getRepository(UserSession)
-      .update(
-        { tokenHash: this.tokenHash(token), revokedAt: IsNull() },
-        { revokedAt: new Date() },
-      );
+    await this.sessionRepo.update(
+      { tokenHash: this.tokenHash(token), revokedAt: IsNull() },
+      { revokedAt: new Date() },
+    );
   }
 
   async updateProfile(
@@ -98,13 +100,12 @@ export class AuthService {
     input: UpdateProfileDto,
   ): Promise<AuthUser> {
     try {
-      const users = this.dataSource.getRepository(AppUser);
-      await users.update(userId, {
+      await this.userRepo.update(userId, {
         name: input.name.trim(),
         email: input.email.trim().toLowerCase(),
         phone: input.phone.trim(),
       });
-      const user = await users.findOneBy({ id: userId });
+      const user = await this.userRepo.findOneBy({ id: userId });
       if (!user) throw new UnauthorizedException();
       return this.publicUser(user);
     } catch (error) {
@@ -119,7 +120,7 @@ export class AuthService {
 
   private async createSession(user: AuthUser) {
     const session = this.newSession(user);
-    await this.dataSource.getRepository(UserSession).save({
+    await this.sessionRepo.save({
       tokenHash: session.tokenHash,
       userId: user.id,
       expiresAt: session.expiresAt,

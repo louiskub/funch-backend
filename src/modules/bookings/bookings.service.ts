@@ -6,8 +6,9 @@ import {
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
-import { DataSource, EntityManager } from 'typeorm';
+import { DataSource, EntityManager, Repository } from 'typeorm';
 import {
   calculateAvailableQuantity,
   calculateBookingTotal,
@@ -21,8 +22,19 @@ import {
 } from '../../core';
 import { addDecimals } from '../../core/decimal.core';
 import { parseIsoInstant } from '../../core/time.core';
+import { AppUser } from '../auth/entities/app-user.entity';
+import { UserSession } from '../auth/entities/user-session.entity';
 import type { AuthUser } from '../auth/types/auth.types';
 import { UserRole } from '../auth/enums/user-role.enum';
+import { Car } from '../admin-fleet/entities/car.entity';
+import { CarTypeBranch } from '../admin-fleet/entities/car-type-branch.entity';
+import { Branch } from '../catalog/entities/branch.entity';
+import { CarOption } from '../options/entities/car-option.entity';
+import { AdditionalCharge } from './entities/additional-charge.entity';
+import { BookingOption } from './entities/booking-option.entity';
+import { Booking } from './entities/booking.entity';
+import { AdditionalChargeType } from './enums/additional-charge-type.enum';
+import { BookingStatus } from './enums/booking-status.enum';
 import type {
   CheckoutInput,
   QuoteInput,
@@ -76,6 +88,24 @@ const instant = (value: string) => {
 @Injectable()
 export class BookingsService {
   constructor(
+    @InjectRepository(Booking)
+    private readonly bookingRepo: Repository<Booking>,
+    @InjectRepository(BookingOption)
+    private readonly bookingOptionRepo: Repository<BookingOption>,
+    @InjectRepository(AdditionalCharge)
+    private readonly additionalChargeRepo: Repository<AdditionalCharge>,
+    @InjectRepository(CarTypeBranch)
+    private readonly offerRepo: Repository<CarTypeBranch>,
+    @InjectRepository(CarOption)
+    private readonly carOptionRepo: Repository<CarOption>,
+    @InjectRepository(Car)
+    private readonly carRepo: Repository<Car>,
+    @InjectRepository(Branch)
+    private readonly branchRepo: Repository<Branch>,
+    @InjectRepository(AppUser)
+    private readonly userRepo: Repository<AppUser>,
+    @InjectRepository(UserSession)
+    private readonly sessionRepo: Repository<UserSession>,
     private readonly db: DataSource,
     private readonly passwords: PasswordService,
   ) {}
@@ -88,8 +118,10 @@ export class BookingsService {
     const returnAt = instant(input.returnAt);
     if (Date.parse(returnAt) <= Date.parse(pickupAt))
       throw new BadRequestException('Return must be after pickup');
-    const offer = await manager
-      .createQueryBuilder()
+    const offer = await (
+      manager ? manager.getRepository(CarTypeBranch) : this.offerRepo
+    )
+      .createQueryBuilder('o')
       .select([
         'o.id AS id',
         'o.branch_id AS "branchId"',
@@ -98,7 +130,6 @@ export class BookingsService {
         'o.currency_code AS currency',
         'b.timezone AS timezone',
       ])
-      .from('car_type_branch', 'o')
       .innerJoin('branch', 'b', 'b.id = o.branch_id')
       .innerJoin('car_type', 't', 't.id = o.car_type_id')
       .where(
@@ -121,8 +152,10 @@ export class BookingsService {
       throw new BadRequestException('Each option may be selected once');
     const lines: QuoteResult['options'] = [];
     for (const item of selected) {
-      const option = await manager
-        .createQueryBuilder()
+      const option = await (
+        manager ? manager.getRepository(CarOption) : this.carOptionRepo
+      )
+        .createQueryBuilder('co')
         .select([
           'co.id AS id',
           'co.pricing_type AS "pricingType"',
@@ -130,7 +163,6 @@ export class BookingsService {
           'co.price::text AS price',
           ':currency AS currency',
         ])
-        .from('car_option', 'co')
         .where(
           'co.id = :optionId AND co.branch_id = :branchId AND co.is_active',
           {
@@ -150,17 +182,20 @@ export class BookingsService {
         );
       let availableQuantity: number | null = null;
       if (option.quantityStock !== null) {
-        const reservations = await manager
-          .createQueryBuilder()
+        const reservations = await (
+          manager
+            ? manager.getRepository(BookingOption)
+            : this.bookingOptionRepo
+        )
+          .createQueryBuilder('bo')
           .select([
             'bo.quantity AS quantity',
             'b.pickup_at AS "pickupAt"',
             'COALESCE(b.actual_return_at, b.return_at) AS "returnAt"',
           ])
-          .from('booking_option', 'bo')
           .innerJoin('booking', 'b', 'b.id = bo.booking_id')
           .where(
-            "bo.car_option_id = :optionId AND b.status IN ('APPROVED','IN_USE')",
+            "bo.car_option_id = :optionId AND b.status IN ('PENDING','APPROVED','IN_USE')",
             {
               optionId: item.carOptionId,
             },
@@ -199,10 +234,9 @@ export class BookingsService {
         currency: offer.currency,
       })),
     });
-    const capacity = await manager
-      .createQueryBuilder()
+    const capacity = await (manager ? manager.getRepository(Car) : this.carRepo)
+      .createQueryBuilder('c')
       .select('count(*)::int', 'count')
-      .from('car', 'c')
       .where(
         "c.car_type_branch_id = :offerId AND c.status = 'ACTIVE' AND c.is_active",
         {
@@ -210,7 +244,7 @@ export class BookingsService {
         },
       )
       .getRawOne<{ count: number }>();
-    const vehicleCapacity = Number(capacity.count);
+    const vehicleCapacity = Number(capacity?.count ?? 0);
     const vehicleAvailability = calculateAvailableQuantity({
       requestedInterval: {
         startsAt: pickupAt,
@@ -245,13 +279,19 @@ export class BookingsService {
         ? randomBytes(32).toString('base64url')
         : null;
     const result = await this.db.transaction(async (manager) => {
+      const bookingRepo = manager.getRepository(Booking);
+      const bookingOptionRepo = manager.getRepository(BookingOption);
+      const userRepo = manager.getRepository(AppUser);
+      const sessionRepo = manager.getRepository(UserSession);
+      const offerRepo = manager.getRepository(CarTypeBranch);
+
       await manager
         .createQueryBuilder()
         .select('pg_advisory_xact_lock(hashtext(:key))')
         .setParameter('key', input.checkoutKey)
         .getRawOne();
-      const existing = await manager
-        .createQueryBuilder()
+      const existing = await bookingRepo
+        .createQueryBuilder('b')
         .select([
           'b.id AS id',
           'b.booking_number AS "bookingNumber"',
@@ -260,7 +300,6 @@ export class BookingsService {
           'b.currency_code AS "currencyCode"',
           'b.user_id AS "userId"',
         ])
-        .from('booking', 'b')
         .where('b.checkout_key = :checkoutKey', {
           checkoutKey: input.checkoutKey,
         })
@@ -269,14 +308,13 @@ export class BookingsService {
         if (actor && existing.userId !== actor.id)
           throw new ForbiddenException();
         if (!actor) {
-          const owner = await manager
-            .createQueryBuilder()
+          const owner = await userRepo
+            .createQueryBuilder('u')
             .select([
               'u.email AS email',
               'u.password_hash AS "passwordHash"',
               'u.is_suspended AS "isSuspended"',
             ])
-            .from('app_user', 'u')
             .where('u.id = :userId', { userId: existing.userId })
             .getRawOne<{
               email: string;
@@ -294,16 +332,11 @@ export class BookingsService {
             ))
           )
             throw new UnauthorizedException('Invalid checkout credentials');
-          await manager
-            .createQueryBuilder()
-            .insert()
-            .into('user_session')
-            .values({
-              token_hash: createHash('sha256').update(token!).digest('hex'),
-              user_id: existing.userId,
-              expires_at: () => "now() + interval '14 days'",
-            })
-            .execute();
+          await sessionRepo.insert({
+            tokenHash: createHash('sha256').update(token!).digest('hex'),
+            userId: existing.userId,
+            expiresAt: () => "now() + interval '14 days'",
+          });
         }
         const { userId: _userId, ...booking } = existing;
         void _userId;
@@ -326,10 +359,9 @@ export class BookingsService {
           .select('pg_advisory_xact_lock(hashtext(:key))')
           .setParameter('key', `account:${email}`)
           .getRawOne();
-        const accountExists = await manager
-          .createQueryBuilder()
+        const accountExists = await userRepo
+          .createQueryBuilder('u')
           .select('u.id')
-          .from('app_user', 'u')
           .where('u.email = :email', { email })
           .getExists();
         if (accountExists)
@@ -337,75 +369,77 @@ export class BookingsService {
             'An account with this email already exists',
           );
         const id = randomUUID();
-        const userResult = await manager
-          .createQueryBuilder()
+        const userResult = await userRepo
+          .createQueryBuilder('u')
           .insert()
-          .into('app_user')
+          .into(AppUser)
           .values({
             id,
             email,
-            password_hash: await this.passwords.hash(input.customerPassword),
+            passwordHash: await this.passwords.hash(input.customerPassword),
             name: input.customerName.trim(),
             phone: input.customerPhone.trim(),
-            role: 'CUSTOMER',
+            role: UserRole.CUSTOMER,
           })
           .returning('id')
           .execute();
         customerId = userResult.raw[0]?.id;
-        await manager
-          .createQueryBuilder()
-          .insert()
-          .into('user_session')
-          .values({
-            token_hash: createHash('sha256').update(token!).digest('hex'),
-            user_id: customerId,
-            expires_at: () => "now() + interval '14 days'",
-          })
-          .execute();
+        await sessionRepo.insert({
+          tokenHash: createHash('sha256').update(token!).digest('hex'),
+          userId: customerId,
+          expiresAt: () => "now() + interval '14 days'",
+        });
       }
+      await offerRepo
+        .createQueryBuilder('o')
+        .select('o.id')
+        .where('o.id = :offerId', { offerId: input.offerId })
+        .setLock('pessimistic_write')
+        .getRawOne();
       const quote = await this.quote(input, manager);
+      if (quote.availableVehicles < 1)
+        throw new ConflictException('Vehicle capacity is unavailable');
+      for (const line of quote.options) {
+        if (
+          line.availableQuantity !== null &&
+          line.availableQuantity < line.quantity
+        )
+          throw new ConflictException(
+            `Option ${line.carOptionId} has insufficient stock`,
+          );
+      }
       const bookingId = randomUUID();
       const bookingNumber = `F${Date.now().toString(36).toUpperCase()}${randomBytes(3).toString('hex').toUpperCase()}`;
-      await manager
-        .createQueryBuilder()
-        .insert()
-        .into('booking')
-        .values({
-          id: bookingId,
-          booking_number: bookingNumber,
-          checkout_key: input.checkoutKey,
-          user_id: customerId,
-          car_type_branch_id: quote.offerId,
-          pickup_branch_id: quote.branchId,
-          return_branch_id: quote.branchId,
-          pickup_at: quote.pickupAt,
-          return_at: quote.returnAt,
-          status: 'PENDING',
-          currency_code: quote.currencyCode,
-          daily_rate_at_booking: quote.dailyRateAtBooking,
-          hourly_rate_at_booking: quote.hourlyRateAtBooking,
-          charged_days: quote.chargedDays,
-          charged_hours: quote.chargedHours,
-          rental_subtotal: quote.rentalSubtotal,
-          options_subtotal: quote.optionsSubtotal,
-          total_amount: quote.totalAmount,
-        })
-        .execute();
+      await bookingRepo.insert({
+        id: bookingId,
+        bookingNumber,
+        checkoutKey: input.checkoutKey,
+        userId: customerId,
+        carTypeBranchId: quote.offerId,
+        pickupBranchId: quote.branchId,
+        returnBranchId: quote.branchId,
+        pickupAt: quote.pickupAt as unknown as Date,
+        returnAt: quote.returnAt as unknown as Date,
+        status: BookingStatus.PENDING,
+        currencyCode: quote.currencyCode,
+        dailyRateAtBooking: quote.dailyRateAtBooking,
+        hourlyRateAtBooking: quote.hourlyRateAtBooking,
+        chargedDays: quote.chargedDays,
+        chargedHours: quote.chargedHours,
+        rentalSubtotal: quote.rentalSubtotal,
+        optionsSubtotal: quote.optionsSubtotal,
+        totalAmount: quote.totalAmount,
+      });
       for (const line of quote.options)
-        await manager
-          .createQueryBuilder()
-          .insert()
-          .into('booking_option')
-          .values({
-            id: randomUUID(),
-            booking_id: bookingId,
-            car_option_id: line.carOptionId,
-            quantity: line.quantity,
-            unit_price_at_booking: line.unitPrice,
-            charged_units: line.chargedUnits,
-            total_amount: line.totalAmount,
-          })
-          .execute();
+        await bookingOptionRepo.insert({
+          id: randomUUID(),
+          bookingId,
+          carOptionId: line.carOptionId,
+          quantity: line.quantity,
+          unitPriceAtBooking: line.unitPrice,
+          chargedUnits: line.chargedUnits,
+          totalAmount: line.totalAmount,
+        });
       return {
         id: bookingId,
         bookingNumber,
@@ -421,8 +455,8 @@ export class BookingsService {
   }
 
   async mine(userId: string) {
-    return this.db
-      .createQueryBuilder()
+    return this.bookingRepo
+      .createQueryBuilder('b')
       .select([
         'b.id AS id',
         'b.booking_number AS "bookingNumber"',
@@ -435,7 +469,6 @@ export class BookingsService {
         't.model AS model',
         'br.name AS "branchName"',
       ])
-      .from('booking', 'b')
       .innerJoin('car_type_branch', 'o', 'o.id = b.car_type_branch_id')
       .innerJoin('car_type', 't', 't.id = o.car_type_id')
       .innerJoin('branch', 'br', 'br.id = b.pickup_branch_id')
@@ -445,8 +478,8 @@ export class BookingsService {
   }
 
   async get(id: string, actor: AuthUser) {
-    const booking = await this.db
-      .createQueryBuilder()
+    const booking = await this.bookingRepo
+      .createQueryBuilder('b')
       .select([
         'b.*',
         'b.booking_number AS "bookingNumber"',
@@ -471,7 +504,6 @@ export class BookingsService {
         't.model AS model',
         'br.name AS "branchName"',
       ])
-      .from('booking', 'b')
       .innerJoin('car_type_branch', 'o', 'o.id = b.car_type_branch_id')
       .innerJoin('car_type', 't', 't.id = o.car_type_id')
       .innerJoin('branch', 'br', 'br.id = b.pickup_branch_id')
@@ -480,8 +512,8 @@ export class BookingsService {
     if (!booking) throw new NotFoundException('Booking not found');
     if (actor.role !== UserRole.ADMIN && booking.userId !== actor.id)
       throw new ForbiddenException();
-    booking.options = await this.db
-      .createQueryBuilder()
+    booking.options = await this.bookingOptionRepo
+      .createQueryBuilder('bo')
       .select([
         'bo.id AS id',
         'bo.car_option_id AS "carOptionId"',
@@ -491,12 +523,11 @@ export class BookingsService {
         'bo.charged_units AS "chargedUnits"',
         'bo.total_amount::text AS "totalAmount"',
       ])
-      .from('booking_option', 'bo')
       .innerJoin('car_option', 'co', 'co.id = bo.car_option_id')
       .where('bo.booking_id = :id', { id })
       .getRawMany();
-    booking.charges = await this.db
-      .createQueryBuilder()
+    booking.charges = await this.additionalChargeRepo
+      .createQueryBuilder('a')
       .select([
         'a.id AS id',
         'a.type AS type',
@@ -508,7 +539,6 @@ export class BookingsService {
         'a.status AS status',
         'a.created_at AS "createdAt"',
       ])
-      .from('additional_charge', 'a')
       .where('a.booking_id = :id', { id })
       .orderBy('a.created_at')
       .getRawMany();
@@ -518,15 +548,15 @@ export class BookingsService {
 
   async cancel(id: string, actor: AuthUser, reason?: string) {
     return this.db.transaction(async (manager) => {
-      const b = await manager
-        .createQueryBuilder()
+      const bookingRepo = manager.getRepository(Booking);
+      const b = await bookingRepo
+        .createQueryBuilder('b')
         .select([
           'b.id AS id',
           'b.user_id AS "userId"',
           'b.status AS status',
           'b.pickup_at AS "pickupAt"',
         ])
-        .from('booking', 'b')
         .where('b.id = :id', { id })
         .setLock('pessimistic_write')
         .getRawOne<Record<string, any>>();
@@ -542,17 +572,15 @@ export class BookingsService {
         cancellationReason: reason ?? null,
       });
       if (!decision.allowed) throw new ConflictException(decision.reason);
-      await manager
-        .createQueryBuilder()
-        .update('booking')
-        .set({
-          status: 'CANCELLED',
-          cancellation_reason:
+      await bookingRepo.update(
+        { id },
+        {
+          status: BookingStatus.CANCELLED,
+          cancellationReason:
             actor.role === UserRole.ADMIN ? reason!.trim() : null,
-          updated_at: () => 'now()',
-        })
-        .where('id = :id', { id })
-        .execute();
+          updatedAt: () => 'now()',
+        },
+      );
       return { id, status: 'CANCELLED' };
     });
   }
@@ -562,8 +590,8 @@ export class BookingsService {
     ctbId: string,
     excludeId?: string,
   ) {
-    const query = manager
-      .createQueryBuilder()
+    const query = (manager ? manager.getRepository(Booking) : this.bookingRepo)
+      .createQueryBuilder('b')
       .select([
         'b.id AS id',
         'b.pickup_at AS "pickupAt"',
@@ -571,13 +599,13 @@ export class BookingsService {
         'b.actual_return_at AS "actualReturnAt"',
         'b.status AS status',
       ])
-      .from('booking', 'b')
       .where(
-        "b.car_type_branch_id = :ctbId AND b.status IN ('APPROVED','IN_USE','COMPLETED')",
+        "b.car_type_branch_id = :ctbId AND b.status IN ('PENDING','APPROVED','IN_USE','COMPLETED')",
         { ctbId },
       );
     if (excludeId) query.andWhere('b.id <> :excludeId', { excludeId });
     const rows = await query.getRawMany<Record<string, any>>();
+    const now = new Date().toISOString();
     return rows.map((b) => ({
       startsAt: new Date(String(b.pickupAt)).toISOString(),
       endsAt: calculateReadyAt({
@@ -585,37 +613,39 @@ export class BookingsService {
         actualReturnAt: b.actualReturnAt
           ? new Date(String(b.actualReturnAt)).toISOString()
           : null,
+        now,
       }).readyAt,
       quantity: 1,
     }));
   }
 
   private async capacityConflicts(manager: EntityManager, ctbId: string) {
-    const count = await manager
-      .createQueryBuilder()
+    const count = await (manager ? manager.getRepository(Car) : this.carRepo)
+      .createQueryBuilder('c')
       .select('count(*)::int', 'count')
-      .from('car', 'c')
       .where(
         "c.car_type_branch_id = :ctbId AND c.status = 'ACTIVE' AND c.is_active",
         { ctbId },
       )
       .getRawOne<{ count: number }>();
-    const capacity = Number(count.count);
-    const rows = await manager
-      .createQueryBuilder()
+    const capacity = Number(count?.count ?? 0);
+    const rows = await (
+      manager ? manager.getRepository(Booking) : this.bookingRepo
+    )
+      .createQueryBuilder('b')
       .select([
         'b.id AS id',
         'b.pickup_at AS "pickupAt"',
         'b.return_at AS "returnAt"',
         'b.actual_return_at AS "actualReturnAt"',
       ])
-      .from('booking', 'b')
       .where(
-        "b.car_type_branch_id = :ctbId AND b.status IN ('APPROVED','IN_USE','COMPLETED')",
+        "b.car_type_branch_id = :ctbId AND b.status IN ('PENDING','APPROVED','IN_USE','COMPLETED')",
         { ctbId },
       )
       .orderBy('b.pickup_at')
       .getRawMany<Record<string, any>>();
+    const now = new Date().toISOString();
     const intervals = rows.map((row) => ({
       id: String(row.id),
       startsAt: new Date(String(row.pickupAt)).toISOString(),
@@ -624,6 +654,7 @@ export class BookingsService {
         actualReturnAt: row.actualReturnAt
           ? new Date(String(row.actualReturnAt)).toISOString()
           : null,
+        now,
       }).readyAt,
     }));
     return intervals
@@ -641,8 +672,8 @@ export class BookingsService {
   }
 
   async queue(status?: string) {
-    const builder = this.db
-      .createQueryBuilder()
+    const builder = this.bookingRepo
+      .createQueryBuilder('b')
       .select([
         'b.id AS id',
         'b.booking_number AS "bookingNumber"',
@@ -658,17 +689,30 @@ export class BookingsService {
         't.model AS model',
         'br.name AS "branchName"',
       ])
-      .from('booking', 'b')
       .innerJoin('app_user', 'u', 'u.id = b.user_id')
       .innerJoin('car_type_branch', 'o', 'o.id = b.car_type_branch_id')
       .innerJoin('car_type', 't', 't.id = o.car_type_id')
       .innerJoin('branch', 'br', 'br.id = b.pickup_branch_id')
       .orderBy('b.created_at');
     if (status !== undefined) builder.where('b.status = :status', { status });
-    const bookings = await builder.getRawMany<Record<string, any>>();
+    const bookings = await builder.getRawMany<{
+      id: string;
+      bookingNumber: string;
+      status: string;
+      pickupAt: string | Date;
+      returnAt: string | Date;
+      actualReturnAt: string | Date | null;
+      totalAmount: string;
+      currencyCode: string;
+      customerName: string;
+      customerEmail: string;
+      brand: string;
+      model: string;
+      branchName: string;
+    }>();
     if (!bookings.length) return bookings;
-    const charges = await this.db
-      .createQueryBuilder()
+    const charges = await this.additionalChargeRepo
+      .createQueryBuilder('a')
       .select([
         'a.booking_id AS "bookingId"',
         'a.id AS id',
@@ -678,12 +722,19 @@ export class BookingsService {
         'a.status AS status',
         'a.created_at AS "createdAt"',
       ])
-      .from('additional_charge', 'a')
       .where('a.booking_id IN (:...bookingIds)', {
         bookingIds: bookings.map(({ id }) => id),
       })
       .orderBy('a.created_at')
-      .getRawMany<Record<string, any>>();
+      .getRawMany<{
+        bookingId: string;
+        id: string;
+        type: string;
+        description: string;
+        amount: string;
+        status: string;
+        createdAt: Date;
+      }>();
     const byBooking = new Map<string, Record<string, unknown>[]>();
     for (const { bookingId, createdAt: _createdAt, ...charge } of charges) {
       void _createdAt;
@@ -709,27 +760,30 @@ export class BookingsService {
 
   async approve(id: string, actor: AuthUser) {
     return this.db.transaction(async (manager) => {
-      const row = await manager
-        .createQueryBuilder()
+      const bookingRepo = manager.getRepository(Booking);
+      const offerRepo = manager.getRepository(CarTypeBranch);
+      const carRepo = manager.getRepository(Car);
+      const optionRepo = manager.getRepository(CarOption);
+      const bookingOptionRepo = manager.getRepository(BookingOption);
+
+      const row = await bookingRepo
+        .createQueryBuilder('b')
         .select('b.*')
-        .from('booking', 'b')
         .where('b.id = :id', { id })
         .setLock('pessimistic_write')
         .getRawOne<Record<string, any>>();
       if (!row) throw new NotFoundException('Booking not found');
       if (row.status !== 'PENDING')
         throw new ConflictException('Only pending bookings can be approved');
-      await manager
-        .createQueryBuilder()
+      await offerRepo
+        .createQueryBuilder('o')
         .select('o.id')
-        .from('car_type_branch', 'o')
         .where('o.id = :id', { id: row.car_type_branch_id })
         .setLock('pessimistic_write')
         .getRawOne();
-      const carCount = await manager
-        .createQueryBuilder()
+      const carCount = await carRepo
+        .createQueryBuilder('c')
         .select('count(*)::int', 'count')
-        .from('car', 'c')
         .where(
           "c.car_type_branch_id = :id AND c.status = 'ACTIVE' AND c.is_active",
           {
@@ -737,7 +791,7 @@ export class BookingsService {
           },
         )
         .getRawOne<{ count: number }>();
-      const cars = carCount.count;
+      const cars = Number(carCount?.count ?? 0);
       const interval = {
         startsAt: new Date(String(row.pickup_at)).toISOString(),
         endsAt: calculateReadyAt({
@@ -758,37 +812,34 @@ export class BookingsService {
         throw new ConflictException(
           'Vehicle capacity is unavailable; reject this request with a reason',
         );
-      const options = await manager
-        .createQueryBuilder()
+      const options = await bookingOptionRepo
+        .createQueryBuilder('bo')
         .select([
           'bo.car_option_id AS id',
           'bo.quantity AS quantity',
           'co.quantity_stock AS stock',
         ])
-        .from('booking_option', 'bo')
         .innerJoin('car_option', 'co', 'co.id = bo.car_option_id')
         .where('bo.booking_id = :id AND co.quantity_stock IS NOT NULL', { id })
         .orderBy('bo.car_option_id')
         .getRawMany<Record<string, any>>();
       for (const option of options) {
-        await manager
-          .createQueryBuilder()
+        await optionRepo
+          .createQueryBuilder('co')
           .select('co.id')
-          .from('car_option', 'co')
           .where('co.id = :optionId', { optionId: option.id })
           .setLock('pessimistic_write')
           .getRawOne();
-        const reservations = await manager
-          .createQueryBuilder()
+        const reservations = await bookingOptionRepo
+          .createQueryBuilder('bo')
           .select([
             'bo.quantity AS quantity',
             'b.pickup_at AS "pickupAt"',
             'COALESCE(b.actual_return_at, b.return_at) AS "returnAt"',
           ])
-          .from('booking_option', 'bo')
           .innerJoin('booking', 'b', 'b.id = bo.booking_id')
           .where(
-            "bo.car_option_id = :optionId AND b.status IN ('APPROVED','IN_USE') AND b.id <> :id",
+            "bo.car_option_id = :optionId AND b.status IN ('PENDING','APPROVED','IN_USE') AND b.id <> :id",
             {
               optionId: option.id,
               id,
@@ -809,17 +860,15 @@ export class BookingsService {
             `Option ${option.id} has insufficient stock`,
           );
       }
-      await manager
-        .createQueryBuilder()
-        .update('booking')
-        .set({
-          status: 'APPROVED',
-          approved_by: actor.id,
-          approved_at: () => 'now()',
-          updated_at: () => 'now()',
-        })
-        .where('id = :id', { id })
-        .execute();
+      await bookingRepo.update(
+        { id },
+        {
+          status: BookingStatus.APPROVED,
+          approvedBy: actor.id,
+          approvedAt: () => 'now()',
+          updatedAt: () => 'now()',
+        },
+      );
       return { id, status: 'APPROVED' };
     });
   }
@@ -827,13 +876,13 @@ export class BookingsService {
   async reject(id: string, reason: string) {
     if (!reason.trim())
       throw new BadRequestException('A rejection reason is required');
-    const result = await this.db
+    const result = await this.bookingRepo
       .createQueryBuilder()
-      .update('booking')
+      .update(Booking)
       .set({
-        status: 'REJECTED',
-        rejection_reason: reason.trim(),
-        updated_at: () => 'now()',
+        status: BookingStatus.REJECTED,
+        rejectionReason: reason.trim(),
+        updatedAt: () => 'now()',
       })
       .where("id = :id AND status = 'PENDING'", { id })
       .returning('id')
@@ -845,32 +894,31 @@ export class BookingsService {
 
   async pickup(id: string, carId: string) {
     return this.db.transaction(async (manager) => {
-      const booking = await manager
-        .createQueryBuilder()
+      const bookingRepo = manager.getRepository(Booking);
+      const carRepo = manager.getRepository(Car);
+      const booking = await bookingRepo
+        .createQueryBuilder('b')
         .select('b.*')
-        .from('booking', 'b')
         .where('b.id = :id', { id })
         .setLock('pessimistic_write')
         .getRawOne<Record<string, any>>();
       if (!booking) throw new NotFoundException('Booking not found');
-      const car = await manager
-        .createQueryBuilder()
+      const car = await carRepo
+        .createQueryBuilder('c')
         .select([
           'c.id AS id',
           'c.car_type_branch_id AS "carTypeBranchId"',
           'c.status AS status',
           'c.is_active AS is_active',
         ])
-        .from('car', 'c')
         .where('c.id = :carId', { carId })
         .setLock('pessimistic_write')
         .getRawOne<Record<string, any>>();
       if (!car) throw new NotFoundException('Car not found');
       const current = new Date();
-      const active = await manager
-        .createQueryBuilder()
+      const active = await bookingRepo
+        .createQueryBuilder('b')
         .select('b.id')
-        .from('booking', 'b')
         .where(
           "b.car_id = :carId AND b.status = 'IN_USE' AND b.actual_return_at IS NULL AND b.id <> :id",
           {
@@ -894,27 +942,24 @@ export class BookingsService {
         now: current.toISOString(),
       });
       if (!decision.allowed) throw new ConflictException(decision.reason);
-      await manager
-        .createQueryBuilder()
-        .update('booking')
-        .set({ status: 'IN_USE', car_id: carId, updated_at: () => 'now()' })
-        .where('id = :id', { id })
-        .execute();
+      await bookingRepo.update(
+        { id },
+        { status: BookingStatus.IN_USE, carId, updatedAt: () => 'now()' },
+      );
       return { id, status: 'IN_USE', carId };
     });
   }
 
   async pickupCars(id: string) {
-    const booking = await this.db
-      .createQueryBuilder()
+    const booking = await this.bookingRepo
+      .createQueryBuilder('b')
       .select('b.car_type_branch_id', 'carTypeBranchId')
-      .from('booking', 'b')
       .where("b.id = :id AND b.status = 'APPROVED'", { id })
       .getRawOne<{ carTypeBranchId: string }>();
     if (!booking)
       throw new ConflictException('Booking is not ready for pickup');
-    return this.db
-      .createQueryBuilder()
+    return this.carRepo
+      .createQueryBuilder('c')
       .select([
         'c.id AS id',
         'c.license_plate AS "licensePlate"',
@@ -922,7 +967,6 @@ export class BookingsService {
         `EXISTS(SELECT 1 FROM booking active WHERE active.car_id = c.id AND active.status = 'IN_USE' AND active.actual_return_at IS NULL) AS "isOutOnRent"`,
         `COALESCE((SELECT CASE WHEN previous.actual_return_at IS NULL THEN previous.return_at + interval '2 hours' ELSE previous.actual_return_at + interval '1 hour' END FROM booking previous WHERE previous.car_id = c.id AND previous.status IN ('IN_USE','COMPLETED') ORDER BY COALESCE(previous.actual_return_at, previous.return_at) DESC LIMIT 1), '-infinity'::timestamptz) AS "readyAt"`,
       ])
-      .from('car', 'c')
       .where('c.car_type_branch_id = :carTypeBranchId AND c.is_active', {
         carTypeBranchId: booking.carTypeBranchId,
       })
@@ -931,13 +975,14 @@ export class BookingsService {
   }
 
   private async carReadyAt(manager: EntityManager, carId: string) {
-    const row = await manager
-      .createQueryBuilder()
+    const row = await (
+      manager ? manager.getRepository(Booking) : this.bookingRepo
+    )
+      .createQueryBuilder('b')
       .select([
         'b.return_at AS "returnAt"',
         'b.actual_return_at AS "actualReturnAt"',
       ])
-      .from('booking', 'b')
       .where("b.car_id = :carId AND b.status IN ('IN_USE','COMPLETED')", {
         carId,
       })
@@ -950,13 +995,14 @@ export class BookingsService {
           actualReturnAt: row.actualReturnAt
             ? new Date(String(row.actualReturnAt)).toISOString()
             : null,
+          now: new Date().toISOString(),
         }).readyAt
       : '1970-01-01T00:00:00Z';
   }
 
   async returnPreview(id: string) {
-    const row = await this.db
-      .createQueryBuilder()
+    const row = await this.bookingRepo
+      .createQueryBuilder('b')
       .select([
         'b.*',
         'b.car_type_branch_id AS "carTypeBranchId"',
@@ -968,7 +1014,6 @@ export class BookingsService {
         'b.currency_code AS currency',
         'br.timezone AS timezone',
       ])
-      .from('booking', 'b')
       .innerJoin('car_type_branch', 'o', 'o.id = b.car_type_branch_id')
       .innerJoin('branch', 'br', 'br.id = o.branch_id')
       .where('b.id = :id', { id })
@@ -978,8 +1023,8 @@ export class BookingsService {
       throw new ConflictException('Only in-use bookings can be returned');
     if (row.actual_return_at)
       throw new ConflictException('Return has already been recorded');
-    const options = await this.db
-      .createQueryBuilder()
+    const options = await this.bookingOptionRepo
+      .createQueryBuilder('bo')
       .select([
         'bo.id AS id',
         'bo.car_option_id AS "carOptionId"',
@@ -989,7 +1034,6 @@ export class BookingsService {
         'bo.charged_units AS "chargedUnits"',
         'bo.total_amount::text AS "totalAmount"',
       ])
-      .from('booking_option', 'bo')
       .innerJoin('car_option', 'co', 'co.id = bo.car_option_id')
       .where('bo.booking_id = :id', { id })
       .getRawMany<Record<string, any>>();
@@ -1026,26 +1070,28 @@ export class BookingsService {
 
   async completeReturn(id: string, actor: AuthUser, charges: AddChargeInput[]) {
     return this.db.transaction(async (manager) => {
-      const b = await manager
-        .createQueryBuilder()
+      const bookingRepo = manager.getRepository(Booking);
+      const offerRepo = manager.getRepository(CarTypeBranch);
+      const additionalChargeRepo = manager.getRepository(AdditionalCharge);
+
+      const b = await bookingRepo
+        .createQueryBuilder('b')
         .select('b.*')
-        .from('booking', 'b')
         .where('b.id = :id', { id })
         .setLock('pessimistic_write')
         .getRawOne<Record<string, any>>();
       if (!b) throw new NotFoundException('Booking not found');
       if (b.status !== 'IN_USE')
         throw new ConflictException('Only in-use bookings can be returned');
-      await manager
-        .createQueryBuilder()
+      await offerRepo
+        .createQueryBuilder('o')
         .select('o.id')
-        .from('car_type_branch', 'o')
         .where('o.id = :id', { id: b.car_type_branch_id })
         .setLock('pessimistic_write')
         .getRawOne();
       if (b.actual_return_at) {
-        const existing = await manager
-          .createQueryBuilder()
+        const existing = await additionalChargeRepo
+          .createQueryBuilder('a')
           .select([
             'a.id AS id',
             'a.type AS type',
@@ -1055,7 +1101,6 @@ export class BookingsService {
             'a.amount::text AS amount',
             'a.status AS status',
           ])
-          .from('additional_charge', 'a')
           .where(
             "a.booking_id = :id AND a.type IN ('EXTRA_RENTAL','EXTRA_OPTION')",
             { id },
@@ -1075,25 +1120,25 @@ export class BookingsService {
       }
       const preview = await this.returnPreview(id);
       for (const line of preview.lines)
-        await manager
+        await additionalChargeRepo
           .createQueryBuilder()
           .insert()
-          .into('additional_charge')
+          .into(AdditionalCharge)
           .values({
             id: randomUUID(),
-            booking_id: id,
-            booking_option_id:
+            bookingId: id,
+            bookingOptionId:
               line.kind === 'EXTRA_OPTION' ? line.bookingOptionId : null,
-            type: line.kind,
+            type: line.kind as AdditionalChargeType,
             description:
               line.kind === 'EXTRA_RENTAL'
                 ? 'Additional rental time'
                 : 'Additional option rental',
             quantity: line.quantity,
-            unit_price: line.unitPrice.amount,
+            unitPrice: line.unitPrice.amount,
             amount: line.amount.amount,
             status: 'CONFIRMED',
-            created_by: actor.id,
+            createdBy: actor.id,
           })
           .orIgnore()
           .execute();
@@ -1104,32 +1149,25 @@ export class BookingsService {
           throw new BadRequestException(
             'Charge amount must be a non-negative decimal with at most four places',
           );
-        await manager
-          .createQueryBuilder()
-          .insert()
-          .into('additional_charge')
-          .values({
-            id: randomUUID(),
-            booking_id: id,
-            type: charge.type,
-            description: charge.description.trim(),
-            quantity: 1,
-            unit_price: charge.amount,
-            amount: charge.amount,
-            status: 'PENDING',
-            created_by: actor.id,
-          })
-          .execute();
+        await additionalChargeRepo.insert({
+          id: randomUUID(),
+          bookingId: id,
+          type: charge.type as AdditionalChargeType,
+          description: charge.description.trim(),
+          quantity: 1,
+          unitPrice: charge.amount,
+          amount: charge.amount,
+          status: 'PENDING',
+          createdBy: actor.id,
+        });
       }
-      await manager
-        .createQueryBuilder()
-        .update('booking')
-        .set({
-          actual_return_at: preview.actualReturnAt,
-          updated_at: () => 'now()',
-        })
-        .where('id = :id', { id })
-        .execute();
+      await bookingRepo.update(
+        { id },
+        {
+          actualReturnAt: preview.actualReturnAt,
+          updatedAt: () => 'now()',
+        },
+      );
       return {
         id,
         status: 'IN_USE',
@@ -1144,14 +1182,16 @@ export class BookingsService {
 
   async confirmReturn(id: string) {
     return this.db.transaction(async (manager) => {
-      const b = await manager
-        .createQueryBuilder()
+      const bookingRepo = manager.getRepository(Booking);
+      const additionalChargeRepo = manager.getRepository(AdditionalCharge);
+
+      const b = await bookingRepo
+        .createQueryBuilder('b')
         .select([
           'b.id AS id',
           'b.status AS status',
           'b.actual_return_at AS actual_return_at',
         ])
-        .from('booking', 'b')
         .where('b.id = :id', { id })
         .setLock('pessimistic_write')
         .getRawOne<Record<string, any>>();
@@ -1164,22 +1204,19 @@ export class BookingsService {
         throw new ConflictException(
           'Record the actual return before completing the booking',
         );
-      const pending = await manager
-        .createQueryBuilder()
+      const pending = await additionalChargeRepo
+        .createQueryBuilder('a')
         .select('a.id')
-        .from('additional_charge', 'a')
         .where("a.booking_id = :id AND a.status = 'PENDING'", { id })
         .getExists();
       if (pending)
         throw new ConflictException(
           'Confirm or waive pending charges before completing the booking',
         );
-      await manager
-        .createQueryBuilder()
-        .update('booking')
-        .set({ status: 'COMPLETED', updated_at: () => 'now()' })
-        .where('id = :id', { id })
-        .execute();
+      await bookingRepo.update(
+        { id },
+        { status: BookingStatus.COMPLETED, updatedAt: () => 'now()' },
+      );
       return {
         id,
         status: 'COMPLETED',
@@ -1189,17 +1226,20 @@ export class BookingsService {
   }
 
   private async finalAmount(manager: EntityManager, id: string) {
-    const row = await manager
-      .createQueryBuilder()
+    const bookingRepo = manager
+      ? manager.getRepository(Booking)
+      : this.bookingRepo;
+    const row = await bookingRepo
+      .createQueryBuilder('b')
       .select([
         'b.total_amount::text AS total',
         "COALESCE(sum(a.amount) FILTER (WHERE a.status = 'CONFIRMED'), 0)::text AS extra",
       ])
-      .from('booking', 'b')
       .leftJoin('additional_charge', 'a', 'a.booking_id = b.id')
       .where('b.id = :id', { id })
       .groupBy('b.id')
       .getRawOne<{ total: string; extra: string }>();
+    if (!row) throw new NotFoundException('Booking not found');
     return addDecimals(row.total, row.extra);
   }
 
@@ -1213,10 +1253,11 @@ export class BookingsService {
     if (!input.description.trim())
       throw new BadRequestException('A charge description is required');
     return this.db.transaction(async (manager) => {
-      const booking = await manager
-        .createQueryBuilder()
+      const bookingRepo = manager.getRepository(Booking);
+      const additionalChargeRepo = manager.getRepository(AdditionalCharge);
+      const booking = await bookingRepo
+        .createQueryBuilder('b')
         .select('b.id')
-        .from('booking', 'b')
         .where("b.id = :id AND b.status = 'IN_USE'", { id })
         .setLock('pessimistic_write')
         .getRawOne();
@@ -1225,22 +1266,17 @@ export class BookingsService {
           'Additional charges can only be added to an in-use booking',
         );
       const chargeId = randomUUID();
-      await manager
-        .createQueryBuilder()
-        .insert()
-        .into('additional_charge')
-        .values({
-          id: chargeId,
-          booking_id: id,
-          type: input.type,
-          description: input.description.trim(),
-          quantity: 1,
-          unit_price: input.amount,
-          amount: input.amount,
-          status: 'PENDING',
-          created_by: actor.id,
-        })
-        .execute();
+      await additionalChargeRepo.insert({
+        id: chargeId,
+        bookingId: id,
+        type: input.type as AdditionalChargeType,
+        description: input.description.trim(),
+        quantity: 1,
+        unitPrice: input.amount,
+        amount: input.amount,
+        status: 'PENDING',
+        createdBy: actor.id,
+      });
       return { id: chargeId, status: 'PENDING' };
     });
   }
@@ -1250,9 +1286,9 @@ export class BookingsService {
       throw new BadRequestException(
         'Charge status must be CONFIRMED or WAIVED',
       );
-    const result = await this.db
+    const result = await this.additionalChargeRepo
       .createQueryBuilder()
-      .update('additional_charge')
+      .update(AdditionalCharge)
       .set({ status })
       .where("booking_id = :id AND id = :chargeId AND status = 'PENDING'", {
         id,
@@ -1269,8 +1305,8 @@ export class BookingsService {
       to = instant(input.createdTo);
     if (Date.parse(to) <= Date.parse(from))
       throw new BadRequestException('Report end must be after start');
-    const builder = this.db
-      .createQueryBuilder()
+    const builder = this.bookingRepo
+      .createQueryBuilder('b')
       .select([
         'b.id AS id',
         'b.pickup_branch_id AS "branchId"',
@@ -1280,7 +1316,6 @@ export class BookingsService {
         'b.currency_code AS currency',
         'b.total_amount::text AS total',
       ])
-      .from('booking', 'b')
       .innerJoin('car_type_branch', 'o', 'o.id = b.car_type_branch_id')
       .innerJoin('branch', 'br', 'br.id = b.pickup_branch_id')
       .innerJoin('country', 'c', 'c.id = br.country_id')
@@ -1293,12 +1328,19 @@ export class BookingsService {
       builder.andWhere('upper(c.code) = upper(:countryCode)', {
         countryCode: input.countryCode,
       });
-    const rows = await builder.getRawMany<Record<string, any>>();
+    const rows = await builder.getRawMany<{
+      id: string;
+      branchId: string;
+      carTypeId: string;
+      createdAt: string | Date;
+      status: BookingStatus;
+      currency: string;
+      total: string;
+    }>();
     const charges = rows.length
-      ? await this.db
-          .createQueryBuilder()
+      ? await this.additionalChargeRepo
+          .createQueryBuilder('a')
           .select(['a.booking_id AS "bookingId"', 'a.amount::text AS amount'])
-          .from('additional_charge', 'a')
           .where(
             "a.status = 'CONFIRMED' AND a.booking_id IN (:...bookingIds)",
             {
@@ -1333,8 +1375,8 @@ export class BookingsService {
   }
 
   async members(query?: string) {
-    const builder = this.db
-      .createQueryBuilder()
+    const builder = this.userRepo
+      .createQueryBuilder('u')
       .select([
         'u.id AS id',
         'u.name AS name',
@@ -1343,7 +1385,6 @@ export class BookingsService {
         'u.is_suspended AS "isSuspended"',
         'count(b.id)::int AS "bookingCount"',
       ])
-      .from('app_user', 'u')
       .leftJoin('booking', 'b', 'b.user_id = u.id')
       .where("u.role = 'CUSTOMER'")
       .groupBy('u.id')
@@ -1357,8 +1398,8 @@ export class BookingsService {
   }
 
   async member(id: string) {
-    const customer = await this.db
-      .createQueryBuilder()
+    const customer = await this.userRepo
+      .createQueryBuilder('u')
       .select([
         'u.id AS id',
         'u.name AS name',
@@ -1367,7 +1408,6 @@ export class BookingsService {
         'u.is_suspended AS "isSuspended"',
         'u.created_at AS "createdAt"',
       ])
-      .from('app_user', 'u')
       .where("u.id = :id AND u.role = 'CUSTOMER'", { id })
       .getRawOne<Record<string, any>>();
     if (!customer) throw new NotFoundException('Customer not found');
@@ -1376,19 +1416,21 @@ export class BookingsService {
 
   async suspend(id: string, suspended: boolean) {
     return this.db.transaction(async (manager) => {
-      const result = await manager
+      const userRepo = manager.getRepository(AppUser);
+      const sessionRepo = manager.getRepository(UserSession);
+      const result = await userRepo
         .createQueryBuilder()
-        .update('app_user')
-        .set({ is_suspended: suspended, updated_at: () => 'now()' })
+        .update(AppUser)
+        .set({ isSuspended: suspended, updatedAt: () => 'now()' })
         .where("id = :id AND role = 'CUSTOMER'", { id })
         .returning('id')
         .execute();
       if (!result.raw[0]) throw new NotFoundException('Customer not found');
       if (suspended)
-        await manager
+        await sessionRepo
           .createQueryBuilder()
-          .update('user_session')
-          .set({ revoked_at: () => 'now()' })
+          .update(UserSession)
+          .set({ revokedAt: () => 'now()' })
           .where('user_id = :id AND revoked_at IS NULL', { id })
           .execute();
       return { id, isSuspended: suspended };

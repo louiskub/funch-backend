@@ -36,7 +36,7 @@ describe('Catalog API (PostgreSQL)', () => {
     const countries = await request(app.getHttpServer())
       .get('/api/countries')
       .expect(200);
-    expect(countries.body.data).toHaveLength(2);
+    expect(countries.body.data).toHaveLength(10);
     expect(countries.body.data).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ code: 'TH' }),
@@ -47,9 +47,30 @@ describe('Catalog API (PostgreSQL)', () => {
     const thailand = await request(app.getHttpServer())
       .get('/api/countries/TH/branches')
       .expect(200);
-    expect(thailand.body.data).toMatchObject([
-      { code: 'BKK', timezone: 'Asia/Bangkok', currencyCode: 'THB' },
-    ]);
+    expect(thailand.body.data).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'BKK',
+          timezone: 'Asia/Bangkok',
+          currencyCode: 'THB',
+        }),
+        expect.objectContaining({
+          code: 'DMK',
+          timezone: 'Asia/Bangkok',
+          currencyCode: 'THB',
+        }),
+        expect.objectContaining({
+          code: 'HDY',
+          timezone: 'Asia/Bangkok',
+          currencyCode: 'THB',
+        }),
+        expect.objectContaining({
+          code: 'CNX',
+          timezone: 'Asia/Bangkok',
+          currencyCode: 'THB',
+        }),
+      ]),
+    );
     const us = await request(app.getHttpServer())
       .get('/api/countries/US/branches')
       .expect(200);
@@ -58,8 +79,7 @@ describe('Catalog API (PostgreSQL)', () => {
     ]);
 
     await db.query(
-      'UPDATE car_type_branch SET is_active = false WHERE id = $1',
-      [offerThailand],
+      "UPDATE car_type_branch SET is_active = false WHERE branch_id IN (SELECT b.id FROM branch b JOIN country c ON c.id=b.country_id WHERE c.code='TH')",
     );
     try {
       await request(app.getHttpServer())
@@ -73,16 +93,18 @@ describe('Catalog API (PostgreSQL)', () => {
       const remainingCountries = await request(app.getHttpServer())
         .get('/api/countries')
         .expect(200);
-      expect(remainingCountries.body.data).toMatchObject([
-        { code: 'US', currencyCode: 'USD' },
-      ]);
+      expect(remainingCountries.body.data).toHaveLength(9);
+      expect(remainingCountries.body.data).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ code: 'US', currencyCode: 'USD' }),
+        ]),
+      );
       await request(app.getHttpServer())
         .get(`/api/offers/${offerThailand}`)
         .expect(404);
     } finally {
       await db.query(
-        'UPDATE car_type_branch SET is_active = true WHERE id = $1',
-        [offerThailand],
+        "UPDATE car_type_branch SET is_active = true WHERE branch_id IN (SELECT b.id FROM branch b JOIN country c ON c.id=b.country_id WHERE c.code='TH')",
       );
     }
   });

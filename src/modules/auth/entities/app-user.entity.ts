@@ -1,17 +1,9 @@
-import {
-  Column,
-  CreateDateColumn,
-  Entity,
-  PrimaryColumn,
-  UpdateDateColumn,
-} from 'typeorm';
+import { Column, Entity } from 'typeorm';
+import { BaseEntity } from '../../../common/entities/base.entity';
 import { UserRole } from '../enums/user-role.enum';
 
 @Entity({ name: 'app_user' })
-export class AppUser {
-  @PrimaryColumn('uuid')
-  id!: string;
-
+export class AppUser extends BaseEntity {
   @Column({ type: 'text', unique: true })
   email!: string;
 
@@ -24,15 +16,9 @@ export class AppUser {
   @Column({ type: 'text' })
   phone!: string;
 
-  @Column({ type: 'text' })
+  @Column({ type: 'enum', enum: UserRole, default: UserRole.CUSTOMER })
   role!: UserRole;
 
   @Column({ name: 'is_suspended', type: 'boolean', default: false })
   isSuspended!: boolean;
-
-  @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
-  createdAt!: Date;
-
-  @UpdateDateColumn({ name: 'updated_at', type: 'timestamptz' })
-  updatedAt!: Date;
 }

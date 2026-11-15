@@ -59,6 +59,8 @@ describe('Authentication API (isolated PostgreSQL)', () => {
   });
 
   beforeEach(async () => {
+    await db.query('DELETE FROM additional_charge');
+    await db.query('DELETE FROM booking');
     await db.query('DELETE FROM user_session');
     await db.query('DELETE FROM app_user');
   });

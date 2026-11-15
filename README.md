@@ -10,9 +10,9 @@ npm run db:setup
 npm run start:dev
 ```
 
-The compose project uses host port `15432` and a project-scoped volume. The `.env` file is loaded by the start, database, and admin-provision scripts; values already exported in the process take precedence. `db:setup` applies the timestamped TypeORM migrations and repeatable TypeScript seed. `db:migrate` and `db:seed` can be run separately. Configure `DATABASE_URL` for another database and set `DATABASE_SSL=true` when the server requires TLS; the default local URL is `postgres://car-rental:car-rental@localhost:15432/car-rental`.
+The compose project uses host port `15432` and a project-scoped volume. The `.env` file is loaded by the start and database scripts; values already exported in the process take precedence. Database migrations are temporarily removed while the Entity model is rebuilt. `db:migrate` is therefore a no-op, and `db:setup` does not create or alter tables. Configure `DATABASE_URL` for another database and set `DATABASE_SSL=true` when the server requires TLS; the default local URL is `postgres://car-rental:car-rental@localhost:15432/car-rental`.
 
-Use `npm run db:migrate` to upgrade an existing database. The seed inserts missing demo rows in one transaction and preserves existing country/branch details, gallery order, rates, activation flags, and car status. It is not a demo reset command.
+The repeatable seed inserts missing countries, airport branches, car types, offers, cars, options, local demo accounts, and bookings in one transaction. It requires a database whose schema already matches the Entities. It preserves existing rows, including country/branch details, gallery order, rates, activation flags, and car status; it is not a reset command. It includes local demo logins (`demo-customer@example.test` and `demo-admin@example.test`, password `FunchDemo2026!`), so use it only with development data.
 
 ## Booking demo data
 
@@ -28,9 +28,9 @@ Suggested two-session walkthrough: sign in as the customer, quote an offer with 
 
 ## Currency reference data
 
-`Currency` lives in `src/modules/catalog/entities/currency.entity.ts`. Its primary key is `code`, with `name` and `minorUnits` mapped to `minor_units`. Migration `20261115000100-Currency` creates the registry with THB and USD, both with two minor-unit decimal places, and adds foreign keys from `country.currency_code` and `car_type_branch.currency_code`. Unknown offer currencies return `400` on create or update. Minor-unit metadata does not change rental calculations or rounding.
+`Currency` lives in `src/modules/catalog/entities/currency.entity.ts`. Its primary key is `code`, with `name` and `minorUnits` mapped to `minor_units`. Its current reference data includes THB, USD, JPY, SGD, MYR, KRW, AUD, GBP, CAD, and AED. Unknown offer currencies return `400` on create or update. Minor-unit metadata does not change rental calculations or rounding.
 
-If an existing country or offer uses a code outside the registry, the migration fails transactionally instead of relabeling existing prices. Add approved currency metadata through a migration before adding more supported currencies. No Currency CRUD API or UI is included.
+No Currency CRUD API or UI is included. Schema migrations are temporarily removed while the Entity model is rebuilt; regenerate them before setting up or upgrading a database.
 
 ## HTTP bootstrap and API documentation
 
@@ -81,7 +81,7 @@ Catalog responses include branch timezone and currency. Monetary numeric columns
 - Browser state changes require the configured exact `FRONTEND_ORIGIN`; configure `FRONTEND_ORIGIN` and `DATABASE_URL` for deployment.
 - For later protected routes, compose `SessionAuthGuard` with `RoleGuard` and declare staff access with `@Roles(UserRole.ADMIN)`.
 
-Provision a demo admin only after applying migrations. The command requires explicit credentials and can promote/reset an account with the matching email:
+Provision a demo admin only after preparing a database schema that matches the Entities. The command requires explicit credentials and can promote/reset an account with the matching email:
 
 ```sh
 ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD='use-a-private-12-plus-character-password' ADMIN_NAME='Demo Admin' ADMIN_PHONE='+66123456789' npm run admin:provision

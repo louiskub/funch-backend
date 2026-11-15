@@ -2,7 +2,7 @@ import {
   IsArray,
   IsBoolean,
   IsDateString,
-  IsIn,
+  IsEnum,
   IsInt,
   IsString,
   IsUUID,
@@ -13,6 +13,9 @@ import {
   MinLength,
   ValidateIf,
 } from 'class-validator';
+import { CarTransmission } from '../enums/car-transmission.enum';
+import { CarFuelType } from '../enums/car-fuel-type.enum';
+import { CarStatus } from '../enums/car-status.enum';
 
 const decimal = /^(?:0|[1-9]\d{0,9})(?:\.\d{1,4})?$/;
 
@@ -25,8 +28,8 @@ export class CarTypeDto {
   @IsString() @MinLength(1) @MaxLength(80) brand!: string;
   @IsString() @MinLength(1) @MaxLength(100) model!: string;
   @IsInt() @Min(1) @Max(100) seats!: number;
-  @IsIn(['AUTO', 'MANUAL']) transmission!: string;
-  @IsIn(['GASOLINE', 'DIESEL', 'ELECTRIC', 'HYBRID']) fuelType!: string;
+  @IsEnum(CarTransmission) transmission!: CarTransmission;
+  @IsEnum(CarFuelType) fuelType!: CarFuelType;
   @IsArray() @IsString({ each: true }) features!: string[];
 }
 
@@ -47,11 +50,11 @@ export class UpdateCarTypeDto {
   @Max(100)
   seats?: number;
   @ValidateIf((_, value: unknown) => value !== undefined)
-  @IsIn(['AUTO', 'MANUAL'])
-  transmission?: string;
+  @IsEnum(CarTransmission)
+  transmission?: CarTransmission;
   @ValidateIf((_, value: unknown) => value !== undefined)
-  @IsIn(['GASOLINE', 'DIESEL', 'ELECTRIC', 'HYBRID'])
-  fuelType?: string;
+  @IsEnum(CarFuelType)
+  fuelType?: CarFuelType;
   @ValidateIf((_, value: unknown) => value !== undefined)
   @IsArray()
   @IsString({ each: true })
@@ -95,7 +98,7 @@ export class CarDto {
   @ValidateIf((_, value: unknown) => value !== undefined && value !== null)
   @IsDateString()
   buyDate?: string | null;
-  @IsIn(['ACTIVE', 'MAINTENANCE', 'DECOMMISSIONED']) status!: string;
+  @IsEnum(CarStatus) status!: CarStatus;
 }
 
 export class UpdateCarDto {
@@ -121,6 +124,6 @@ export class UpdateCarDto {
   @IsDateString()
   buyDate?: string | null;
   @ValidateIf((_, value: unknown) => value !== undefined)
-  @IsIn(['ACTIVE', 'MAINTENANCE', 'DECOMMISSIONED'])
-  status?: string;
+  @IsEnum(CarStatus)
+  status?: CarStatus;
 }

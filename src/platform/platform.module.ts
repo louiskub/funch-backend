@@ -1,26 +1,15 @@
-import { Injectable, Module, OnApplicationShutdown } from '@nestjs/common';
-import { DataSource } from 'typeorm';
+import { Module } from '@nestjs/common';
+import { TypeOrmModule } from '@nestjs/typeorm';
 import { createAppDataSource } from './database/typeorm-data-source';
 import { StorageModule } from './storage/storage.module';
 
-@Injectable()
-class DataSourceShutdown implements OnApplicationShutdown {
-  constructor(private readonly dataSource: DataSource) {}
-
-  async onApplicationShutdown() {
-    if (this.dataSource.isInitialized) await this.dataSource.destroy();
-  }
-}
-
 @Module({
-  providers: [
-    {
-      provide: DataSource,
-      useFactory: () => createAppDataSource().initialize(),
-    },
-    DataSourceShutdown,
+  imports: [
+    TypeOrmModule.forRootAsync({
+      useFactory: () => createAppDataSource().options,
+    }),
+    StorageModule,
   ],
-  imports: [StorageModule],
-  exports: [DataSource, StorageModule],
+  exports: [TypeOrmModule, StorageModule],
 })
 export class PlatformModule {}

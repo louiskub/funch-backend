@@ -4,40 +4,44 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { DataSource } from 'typeorm';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { randomUUID } from 'node:crypto';
+import { Branch } from '../catalog/entities/branch.entity';
+import { CarOption } from './entities/car-option.entity';
 import { CreateOptionDto, UpdateOptionDto } from './dto/options.dto';
 
-type OptionRecord = Record<string, unknown> & {
-  id: string;
-  branchId: string;
-  code: string;
-  name: string;
-  description: string;
-  category: string;
-  pricingType: string;
-  price: string;
-  quantityStock: number | null;
-  isActive: boolean;
-};
-const selection = `o.id, o.branch_id AS "branchId", o.code, o.name, o.description, o.category,
-  o.pricing_type AS "pricingType", o.price::text AS price, o.quantity_stock AS "quantityStock", o.is_active AS "isActive"`;
-const returning = `id, branch_id AS "branchId", code, name, description, category,
-  pricing_type AS "pricingType", price::text AS price, quantity_stock AS "quantityStock", is_active AS "isActive"`;
+const response = (option: CarOption) => ({
+  id: option.id,
+  branchId: option.branchId,
+  code: option.code,
+  name: option.name,
+  description: option.description,
+  category: option.category,
+  pricingType: option.pricingType,
+  price: String(option.price),
+  quantityStock: option.quantityStock,
+  isActive: option.isActive,
+});
 
 @Injectable()
 export class OptionsService {
-  constructor(private readonly dataSource: DataSource) {}
+  constructor(
+    @InjectRepository(CarOption)
+    private readonly carOptionRepo: Repository<CarOption>,
+    @InjectRepository(Branch)
+    private readonly branchRepo: Repository<Branch>,
+  ) {}
 
   async branches() {
-    return this.dataSource
-      .createQueryBuilder()
+    return this.branchRepo
+      .createQueryBuilder('b')
       .select([
         'b.id AS id',
         'b.name AS name',
         'b.city AS city',
         'c.code AS "countryCode"',
       ])
-      .from('branch', 'b')
       .innerJoin('country', 'c', 'c.id = b.country_id')
       .orderBy('c.name')
       .addOrderBy('b.name')
@@ -45,55 +49,45 @@ export class OptionsService {
   }
 
   async publicForBranch(branchId: string) {
-    return this.dataSource
-      .createQueryBuilder()
-      .select(selection)
-      .from('car_option', 'o')
-      .innerJoin('branch', 'b', 'b.id = o.branch_id AND b.is_active')
-      .where('o.branch_id = :branchId AND o.is_active', { branchId })
-      .orderBy('o.category')
-      .addOrderBy('o.name')
-      .getRawMany();
+    const [branch, options] = await Promise.all([
+      this.branchRepo.findOneBy({
+        id: branchId,
+        isActive: true,
+      }),
+      this.carOptionRepo.find({
+        where: { branchId, isActive: true },
+        order: { category: 'ASC', name: 'ASC' },
+      }),
+    ]);
+    return branch ? options.map(response) : [];
   }
 
   async adminForBranch(branchId: string) {
-    return this.dataSource
-      .createQueryBuilder()
-      .select(selection)
-      .from('car_option', 'o')
-      .where('o.branch_id = :branchId', { branchId })
-      .orderBy('o.is_active', 'DESC')
-      .addOrderBy('o.name')
-      .getRawMany();
+    const options = await this.carOptionRepo.find({
+      where: { branchId },
+      order: { isActive: 'DESC', name: 'ASC' },
+    });
+    return options.map(response);
   }
 
   async create(input: CreateOptionDto) {
     try {
-      const branch = await this.dataSource
-        .createQueryBuilder()
-        .select('b.id')
-        .from('branch', 'b')
-        .where('b.id = :branchId', { branchId: input.branchId })
-        .getRawOne();
+      const branch = await this.branchRepo.findOneBy({ id: input.branchId });
       if (!branch) throw new NotFoundException('Branch not found');
-      const result = await this.dataSource
-        .createQueryBuilder()
-        .insert()
-        .into('car_option')
-        .values({
-          id: () => 'gen_random_uuid()',
-          branch_id: input.branchId,
+      const option = await this.carOptionRepo.save(
+        this.carOptionRepo.create({
+          id: randomUUID(),
+          branchId: input.branchId,
           code: input.code,
           name: input.name,
           description: input.description ?? '',
           category: input.category,
-          pricing_type: input.pricingType,
+          pricingType: input.pricingType,
           price: input.price,
-          quantity_stock: input.quantityStock ?? null,
-        })
-        .returning(returning)
-        .execute();
-      return result.raw[0] as OptionRecord;
+          quantityStock: input.quantityStock ?? null,
+        }),
+      );
+      return response(option);
     } catch (error) {
       this.mapConstraintError(error);
     }
@@ -105,28 +99,21 @@ export class OptionsService {
         'Create a new option to change pricing type',
       );
     try {
-      const values = Object.fromEntries(
-        Object.entries({
-          code: input.code,
-          name: input.name,
-          description: input.description,
-          category: input.category,
-          price: input.price,
-          is_active: input.isActive,
-        }).filter(([, value]) => value !== undefined && value !== null),
-      );
-      if (input.quantityStock !== undefined)
-        Object.assign(values, { quantity_stock: input.quantityStock });
-      Object.assign(values, { updated_at: () => 'now()' });
-      const result = await this.dataSource
-        .createQueryBuilder()
-        .update('car_option')
-        .set(values)
-        .where('id = :optionId', { optionId })
-        .returning(returning)
-        .execute();
-      if (!result.raw[0]) throw new NotFoundException('Option not found');
-      return result.raw[0] as OptionRecord;
+      const option = await this.carOptionRepo.findOneBy({ id: optionId });
+      if (!option) throw new NotFoundException('Option not found');
+      Object.assign(option, {
+        code: input.code ?? option.code,
+        name: input.name ?? option.name,
+        description: input.description ?? option.description,
+        category: input.category ?? option.category,
+        price: input.price ?? option.price,
+        isActive: input.isActive ?? option.isActive,
+        quantityStock:
+          input.quantityStock !== undefined
+            ? input.quantityStock
+            : option.quantityStock,
+      });
+      return response(await this.carOptionRepo.save(option));
     } catch (error) {
       this.mapConstraintError(error);
     }

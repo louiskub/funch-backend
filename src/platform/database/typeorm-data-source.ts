@@ -1,15 +1,20 @@
 import 'reflect-metadata';
+import * as path from 'path';
 import { DataSource } from 'typeorm';
 import configFactory from '../config/configuration';
-import { Authentication20260809000200 } from './migrations/20260809000200-Authentication';
-import { Files20260809000500 } from './migrations/20260809000500-Files';
-import { InitialSchema20260809000100 } from './migrations/20260809000100-InitialSchema';
-import { Options20260809000400 } from './migrations/20260809000400-Options';
-import { Currency20261115000100 } from './migrations/20261115000100-Currency';
-import { Bookings20261115000200 } from './migrations/20261115000200-Bookings';
 import { Currency } from '../../modules/catalog/entities/currency.entity';
 import { AppUser } from '../../modules/auth/entities/app-user.entity';
 import { UserSession } from '../../modules/auth/entities/user-session.entity';
+import { Booking } from '../../modules/bookings/entities/booking.entity';
+import { BookingOption } from '../../modules/bookings/entities/booking-option.entity';
+import { AdditionalCharge } from '../../modules/bookings/entities/additional-charge.entity';
+import { Branch } from '../../modules/catalog/entities/branch.entity';
+import { Country } from '../../modules/catalog/entities/country.entity';
+import { CarType } from '../../modules/admin-fleet/entities/car-type.entity';
+import { CarTypeBranch } from '../../modules/admin-fleet/entities/car-type-branch.entity';
+import { Car } from '../../modules/admin-fleet/entities/car.entity';
+import { CarOption } from '../../modules/options/entities/car-option.entity';
+import { FileAsset } from '../../modules/files/entities/file-asset.entity';
 
 export function createAppDataSource() {
   const appConfig = configFactory();
@@ -20,15 +25,22 @@ export function createAppDataSource() {
       ? { rejectUnauthorized: false }
       : false,
     synchronize: false,
-    entities: [AppUser, UserSession, Currency],
-    migrations: [
-      InitialSchema20260809000100,
-      Authentication20260809000200,
-      Options20260809000400,
-      Files20260809000500,
-      Currency20261115000100,
-      Bookings20261115000200,
+    entities: [
+      AppUser,
+      UserSession,
+      Currency,
+      Country,
+      Branch,
+      CarType,
+      CarTypeBranch,
+      Car,
+      CarOption,
+      FileAsset,
+      Booking,
+      BookingOption,
+      AdditionalCharge,
     ],
+    migrations: [path.join(__dirname, 'migrations/*{.ts,.js}')],
   });
 }
 

@@ -67,9 +67,9 @@ describe('Booking API (isolated PostgreSQL)', () => {
 
   async function createBooking(
     options: Array<{ carOptionId: string; quantity: number }> = [],
+    pickupAt = future(3),
+    returnAt = future(4),
   ) {
-    const pickupAt = future(3);
-    const returnAt = future(4);
     const checkoutKey = randomUUID();
     const customerEmail = `${randomUUID()}@booking.test`;
     const customerPassword = 'long-enough-booking-password';
@@ -177,30 +177,50 @@ describe('Booking API (isolated PostgreSQL)', () => {
     }
   });
 
-  it('serializes approval of two requests competing for the final vehicle', async () => {
+  it('reserves capacity on pending checkout and releases it when rejected by admin', async () => {
     const a = await createBooking();
-    const b = await createBooking();
-    const results = await Promise.all([
-      request(app.getHttpServer())
-        .post(`/api/admin/bookings/${a.id}/approve`)
-        .set('Cookie', adminCookie),
-      request(app.getHttpServer())
-        .post(`/api/admin/bookings/${b.id}/approve`)
-        .set('Cookie', adminCookie),
-    ]);
-    expect(results.map((result) => result.status).sort()).toEqual([201, 409]);
-    const states = await db.query(
-      'SELECT status,count(*)::int AS count FROM booking GROUP BY status ORDER BY status',
-    );
-    expect(states.rows).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ status: 'APPROVED', count: 1 }),
-        expect.objectContaining({ status: 'PENDING', count: 1 }),
-      ]),
-    );
+    const checkoutKey = randomUUID();
+    const failResponse = await request(app.getHttpServer())
+      .post('/api/bookings/register-checkout')
+      .set('Origin', origin)
+      .send({
+        offerId,
+        pickupAt: future(3),
+        returnAt: future(4),
+        options: [],
+        checkoutKey,
+        customerName: 'Second Customer',
+        customerEmail: `${randomUUID()}@booking.test`,
+        customerPassword: 'long-enough-booking-password',
+        customerPhone: '+66123456789',
+      });
+    expect(failResponse.status).toBe(409);
+
+    await request(app.getHttpServer())
+      .post(`/api/admin/bookings/${a.id}/reject`)
+      .set('Cookie', adminCookie)
+      .send({ reason: 'Admin rejected request' })
+      .expect(201);
+
+    const retryResponse = await request(app.getHttpServer())
+      .post('/api/bookings/register-checkout')
+      .set('Origin', origin)
+      .send({
+        offerId,
+        pickupAt: future(3),
+        returnAt: future(4),
+        options: [],
+        checkoutKey,
+        customerName: 'Second Customer',
+        customerEmail: `${randomUUID()}@booking.test`,
+        customerPassword: 'long-enough-booking-password',
+        customerPhone: '+66123456789',
+      });
+    expect(retryResponse.status).toBe(201);
+    expect(retryResponse.body.data.status).toBe('PENDING');
   });
 
-  it('serializes stock reservations for a shared branch option', async () => {
+  it('reserves option stock on pending checkout and releases it when rejected by admin', async () => {
     const optionId = randomUUID();
     await db.query(
       `INSERT INTO car_option(id,branch_id,code,name,description,category,pricing_type,price,quantity_stock) VALUES($1,'20000000-0000-4000-8000-000000000001',$2,'Booking seat','Shared test stock','EQUIPMENT','PER_UNIT_PER_DAY','10',1)`,
@@ -218,16 +238,43 @@ describe('Booking API (isolated PostgreSQL)', () => {
     );
     try {
       const a = await createBooking([{ carOptionId: optionId, quantity: 1 }]);
-      const b = await createBooking([{ carOptionId: optionId, quantity: 1 }]);
-      const results = await Promise.all([
-        request(app.getHttpServer())
-          .post(`/api/admin/bookings/${a.id}/approve`)
-          .set('Cookie', adminCookie),
-        request(app.getHttpServer())
-          .post(`/api/admin/bookings/${b.id}/approve`)
-          .set('Cookie', adminCookie),
-      ]);
-      expect(results.map((result) => result.status).sort()).toEqual([201, 409]);
+      const failResponse = await request(app.getHttpServer())
+        .post('/api/bookings/register-checkout')
+        .set('Origin', origin)
+        .send({
+          offerId,
+          pickupAt: future(3),
+          returnAt: future(4),
+          options: [{ carOptionId: optionId, quantity: 1 }],
+          checkoutKey: randomUUID(),
+          customerName: 'Second Option Customer',
+          customerEmail: `${randomUUID()}@booking.test`,
+          customerPassword: 'long-enough-booking-password',
+          customerPhone: '+66123456789',
+        });
+      expect(failResponse.status).toBe(409);
+
+      await request(app.getHttpServer())
+        .post(`/api/admin/bookings/${a.id}/reject`)
+        .set('Cookie', adminCookie)
+        .send({ reason: 'Admin rejected request' })
+        .expect(201);
+
+      const retryResponse = await request(app.getHttpServer())
+        .post('/api/bookings/register-checkout')
+        .set('Origin', origin)
+        .send({
+          offerId,
+          pickupAt: future(3),
+          returnAt: future(4),
+          options: [{ carOptionId: optionId, quantity: 1 }],
+          checkoutKey: randomUUID(),
+          customerName: 'Second Option Customer',
+          customerEmail: `${randomUUID()}@booking.test`,
+          customerPassword: 'long-enough-booking-password',
+          customerPhone: '+66123456789',
+        });
+      expect(retryResponse.status).toBe(201);
     } finally {
       await db.query('DELETE FROM car WHERE id=$1', [secondCar]);
       await db.query('DELETE FROM booking_option WHERE car_option_id=$1', [
@@ -238,13 +285,13 @@ describe('Booking API (isolated PostgreSQL)', () => {
   });
 
   it('enforces owner-only access and releases a cancelled pending request', async () => {
-    const own = await createBooking();
-    const other = await createBooking();
+    const own = await createBooking([], future(1), future(2));
+    const other = await createBooking([], future(3), future(4));
     await request(app.getHttpServer())
       .get(`/api/bookings/${own.id}`)
       .set('Cookie', other.cookie)
       .expect(403);
-    const scheduled = await createBooking();
+    const scheduled = await createBooking([], future(5), future(6));
     await db.query('UPDATE booking SET pickup_at=now() WHERE id=$1', [
       scheduled.id,
     ]);
@@ -303,8 +350,8 @@ describe('Booking API (isolated PostgreSQL)', () => {
   });
 
   it('flags approved bookings that conflict with a delayed physical return cooldown', async () => {
-    const inUse = await createBooking();
-    const approved = await createBooking();
+    const inUse = await createBooking([], future(1), future(2));
+    const approved = await createBooking([], future(3), future(4));
     await db.query(
       `UPDATE booking SET status='IN_USE',car_id='50000000-0000-4000-8000-000000000001',pickup_at=now()-interval '1 hour',return_at=now()+interval '1 hour' WHERE id=$1`,
       [inUse.id],
@@ -415,7 +462,7 @@ describe('Booking API (isolated PostgreSQL)', () => {
     expect(report.body.data.bookingCounts).toContainEqual({
       branchId: expect.any(String),
       status: 'COMPLETED',
-      count: 1,
+      count: 2,
     });
     const data = report.body.data as {
       confirmedAdditionalChargeValues: Array<{

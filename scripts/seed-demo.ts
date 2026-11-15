@@ -64,7 +64,6 @@ async function seedDemo() {
   const db = createAppDataSource();
   await db.initialize();
   try {
-    await db.runMigrations();
     await seedMain(db);
     await db.transaction(async (manager) => {
       const demoIds = DEMO_USERS.map((user) => user.id);
@@ -220,6 +219,7 @@ async function seedDemo() {
           .innerJoin('branch', 'b', 'b.id = o.branch_id')
           .where('o.id = :offerId', { offerId: fixture.offer })
           .getRawOne<Record<string, string>>();
+        if (!offer) throw new Error(`Missing demo offer ${fixture.offer}`);
         const rental = calculateRentalPrice({
           pickupAt: fixture.pickup,
           returnAt: fixture.ret,

@@ -1,5 +1,9 @@
 import { Injectable } from '@nestjs/common';
-import { DataSource } from 'typeorm';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { CarTypeBranch } from '../admin-fleet/entities/car-type-branch.entity';
+import { Branch } from './entities/branch.entity';
+import { Country } from './entities/country.entity';
 import { StorageService } from '../../platform/storage/storage.service';
 
 type CatalogImageRow = {
@@ -13,7 +17,12 @@ type CatalogOfferRow = { images: CatalogImageRow[] } & Record<string, unknown>;
 @Injectable()
 export class CatalogService {
   constructor(
-    private readonly dataSource: DataSource,
+    @InjectRepository(CarTypeBranch)
+    private readonly offerRepo: Repository<CarTypeBranch>,
+    @InjectRepository(Country)
+    private readonly countryRepo: Repository<Country>,
+    @InjectRepository(Branch)
+    private readonly branchRepo: Repository<Branch>,
     private readonly storage: StorageService,
   ) {}
 
@@ -28,8 +37,8 @@ export class CatalogService {
   }
 
   private offerQuery() {
-    return this.dataSource
-      .createQueryBuilder()
+    return this.offerRepo
+      .createQueryBuilder('o')
       .select([
         'o.id AS id',
         'o.branch_id AS "branchId"',
@@ -51,15 +60,14 @@ export class CatalogService {
         'b.timezone AS timezone',
         'c.code AS "countryCode"',
       ])
-      .from('car_type_branch', 'o')
       .innerJoin('branch', 'b', 'b.id = o.branch_id AND b.is_active')
       .innerJoin('country', 'c', 'c.id = b.country_id')
       .innerJoin('car_type', 't', 't.id = o.car_type_id AND t.is_active');
   }
 
   async countries() {
-    return this.dataSource
-      .createQueryBuilder()
+    return this.countryRepo
+      .createQueryBuilder('c')
       .select([
         'c.id AS id',
         'c.code AS code',
@@ -68,7 +76,6 @@ export class CatalogService {
         'c.driving_side AS "drivingSide"',
       ])
       .distinct(true)
-      .from('country', 'c')
       .innerJoin('branch', 'b', 'b.country_id = c.id AND b.is_active')
       .innerJoin('car_type_branch', 'o', 'o.branch_id = b.id AND o.is_active')
       .innerJoin('car_type', 't', 't.id = o.car_type_id AND t.is_active')
@@ -77,8 +84,8 @@ export class CatalogService {
   }
 
   async branches(countryCode: string) {
-    return this.dataSource
-      .createQueryBuilder()
+    return this.branchRepo
+      .createQueryBuilder('b')
       .select([
         'b.id AS id',
         'b.code AS code',
@@ -95,7 +102,6 @@ export class CatalogService {
         'c.currency_code AS "currencyCode"',
       ])
       .distinct(true)
-      .from('branch', 'b')
       .innerJoin('country', 'c', 'c.id = b.country_id')
       .innerJoin('car_type_branch', 'o', 'o.branch_id = b.id AND o.is_active')
       .innerJoin('car_type', 't', 't.id = o.car_type_id AND t.is_active')

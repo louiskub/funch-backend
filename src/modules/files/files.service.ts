@@ -5,8 +5,12 @@ import {
   InternalServerErrorException,
   NotFoundException,
 } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
 import { randomUUID } from 'node:crypto';
-import { DataSource } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
+import { CarType } from '../admin-fleet/entities/car-type.entity';
+import { FileAsset } from './entities/file-asset.entity';
+import { FileVisibility } from './enums/file-visibility.enum';
 import { StorageService } from '../../platform/storage/storage.service';
 import sharp from 'sharp';
 
@@ -62,6 +66,10 @@ function asset(row: FileAssetRow, storage: StorageService) {
 @Injectable()
 export class FilesService {
   constructor(
+    @InjectRepository(FileAsset)
+    private readonly fileAssetRepo: Repository<FileAsset>,
+    @InjectRepository(CarType)
+    private readonly carTypeRepo: Repository<CarType>,
     private readonly dataSource: DataSource,
     private readonly storage: StorageService,
   ) {}
@@ -69,7 +77,7 @@ export class FilesService {
   async upload(
     file: Express.Multer.File | undefined,
     userId: string,
-    visibility: 'PUBLIC' | 'PRIVATE',
+    visibility: FileVisibility | 'PUBLIC' | 'PRIVATE',
   ) {
     if (!file?.buffer?.length || file.buffer.length > maxFileBytes)
       throw new BadRequestException('Image must be between 1 byte and 10 MB');
@@ -104,25 +112,29 @@ export class FilesService {
       throw error;
     }
     try {
-      const result = await this.dataSource
-        .createQueryBuilder()
-        .insert()
-        .into('file_asset')
-        .values({
+      const row = await this.fileAssetRepo.save(
+        this.fileAssetRepo.create({
           id,
-          object_key: key,
-          original_name:
+          objectKey: key,
+          originalName:
             file.originalname.replace(/^.*[\\/]/, '').slice(0, 255) || 'image',
-          mime_type: type.mime,
-          size_bytes: file.buffer.length,
-          visibility,
-          uploaded_by: userId,
-        })
-        .returning(
-          'id, original_name AS "originalName", mime_type AS "mimeType", size_bytes AS "sizeBytes", visibility, object_key AS "objectKey"',
-        )
-        .execute();
-      return asset(result.raw[0] as FileAssetRow, this.storage);
+          mimeType: type.mime,
+          sizeBytes: file.buffer.length,
+          visibility: visibility as FileVisibility,
+          uploadedBy: userId,
+        }),
+      );
+      return asset(
+        {
+          id: row.id,
+          originalName: row.originalName,
+          mimeType: row.mimeType,
+          sizeBytes: row.sizeBytes,
+          visibility: row.visibility,
+          objectKey: row.objectKey,
+        },
+        this.storage,
+      );
     } catch (error) {
       try {
         await this.storage.remove(key);
@@ -137,32 +149,32 @@ export class FilesService {
   }
 
   async listPublic() {
-    const rows = await this.dataSource
-      .createQueryBuilder()
-      .select([
-        'f.id AS id',
-        'f.original_name AS "originalName"',
-        'f.mime_type AS "mimeType"',
-        'f.size_bytes AS "sizeBytes"',
-        'f.visibility AS visibility',
-        'f.object_key AS "objectKey"',
-      ])
-      .from('file_asset', 'f')
-      .where('f.visibility = :visibility', { visibility: 'PUBLIC' })
-      .orderBy('f.created_at', 'DESC')
-      .getRawMany<FileAssetRow>();
-    return rows.map((row) => asset(row, this.storage));
+    const rows = await this.fileAssetRepo.find({
+      where: { visibility: FileVisibility.PUBLIC },
+      order: { createdAt: 'DESC' },
+    });
+    return rows.map((row) =>
+      asset(
+        {
+          id: row.id,
+          originalName: row.originalName,
+          mimeType: row.mimeType,
+          sizeBytes: row.sizeBytes,
+          visibility: row.visibility,
+          objectKey: row.objectKey,
+        },
+        this.storage,
+      ),
+    );
   }
 
   async signedGet(id: string) {
-    const file = await this.dataSource
-      .createQueryBuilder()
-      .select(['f.object_key AS "objectKey"', 'f.visibility AS visibility'])
-      .from('file_asset', 'f')
-      .where('f.id = :id', { id })
-      .getRawOne<{ objectKey: string; visibility: string }>();
+    const file = await this.fileAssetRepo.findOne({
+      select: { objectKey: true, visibility: true },
+      where: { id },
+    });
     if (!file) throw new NotFoundException('File not found');
-    if (file.visibility !== 'PRIVATE')
+    if (file.visibility !== FileVisibility.PRIVATE)
       throw new BadRequestException('Only private files use signed downloads');
     return {
       url: await this.storage.presignedGet(file.objectKey),
@@ -172,31 +184,26 @@ export class FilesService {
 
   async delete(id: string) {
     const file = await this.dataSource.transaction(async (manager) => {
-      const file = await manager
-        .createQueryBuilder()
-        .select('f.object_key', 'objectKey')
-        .from('file_asset', 'f')
+      const fileAssetRepo = manager.getRepository(FileAsset);
+      const carTypeRepo = manager.getRepository(CarType);
+      const file = await fileAssetRepo
+        .createQueryBuilder('f')
+        .select('f.objectKey', 'objectKey')
         .where('f.id = :id', { id })
         .setLock('pessimistic_write')
         .getRawOne<{ objectKey: string }>();
       if (!file) throw new NotFoundException('File not found');
-      const references = await manager
-        .createQueryBuilder()
+      const references = await carTypeRepo
+        .createQueryBuilder('t')
         .select('t.id')
-        .from('car_type', 't')
-        .where('t.image_file_ids @> ARRAY[:id]::uuid[]', { id })
+        .where('t.imageFileIds @> ARRAY[:id]::uuid[]', { id })
         .limit(1)
         .getRawMany();
       if (references.length)
         throw new ConflictException(
           'Remove this image from every gallery before deleting it',
         );
-      await manager
-        .createQueryBuilder()
-        .delete()
-        .from('file_asset')
-        .where('id = :id', { id })
-        .execute();
+      await fileAssetRepo.delete({ id });
       return file;
     });
     try {
@@ -214,24 +221,24 @@ export class FilesService {
     if (new Set(ids).size !== ids.length)
       throw new BadRequestException('Gallery image IDs must be unique');
     return this.dataSource.transaction(async (manager) => {
-      const type = await manager
-        .createQueryBuilder()
-        .select('t.image_file_ids', 'imageFileIds')
-        .from('car_type', 't')
+      const carTypeRepo = manager.getRepository(CarType);
+      const fileAssetRepo = manager.getRepository(FileAsset);
+      const type = await carTypeRepo
+        .createQueryBuilder('t')
+        .select('t.imageFileIds', 'imageFileIds')
         .where('t.id = :carTypeId', { carTypeId })
         .setLock('pessimistic_write')
         .getRawOne<{ imageFileIds: string[] }>();
       if (!type) throw new NotFoundException('Car type not found');
       const lockedIds = [...new Set([...type.imageFileIds, ...ids])].sort();
       if (lockedIds.length) {
-        const files = await manager
-          .createQueryBuilder()
+        const files = await fileAssetRepo
+          .createQueryBuilder('f')
           .select([
             'f.id AS id',
             'f.visibility AS visibility',
-            'f.mime_type AS "mimeType"',
+            'f.mimeType AS "mimeType"',
           ])
-          .from('file_asset', 'f')
           .where('f.id IN (:...lockedIds)', { lockedIds })
           .orderBy('f.id')
           .setLock('pessimistic_write')
@@ -249,10 +256,10 @@ export class FilesService {
             'Only public images can be added to a gallery',
           );
       }
-      const result = await manager
-        .createQueryBuilder()
-        .update('car_type')
-        .set({ image_file_ids: ids, updated_at: () => 'now()' })
+      const result = await carTypeRepo
+        .createQueryBuilder('t')
+        .update(CarType)
+        .set({ imageFileIds: ids, updatedAt: () => 'now()' })
         .where('id = :carTypeId', { carTypeId })
         .returning('id, image_file_ids AS "imageFileIds"')
         .execute();

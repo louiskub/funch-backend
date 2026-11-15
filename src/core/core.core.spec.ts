@@ -478,6 +478,39 @@ describe('calculateReadyAt (BL-05)', () => {
       '2026-03-08T08:30:00.000Z',
     );
   });
+
+  it('extends readyAt to now + 2 hours when car is overdue and actual return is null', () => {
+    const result = calculateReadyAt({
+      returnAt: '2026-11-16T12:00:00+07:00',
+      actualReturnAt: null,
+      now: '2026-11-16T13:30:00+07:00',
+    });
+    expect(new Date(result.readyAt).toISOString()).toBe(
+      new Date('2026-11-16T15:30:00+07:00').toISOString(),
+    );
+  });
+
+  it('keeps returnAt + 2 hours when now is before returnAt', () => {
+    const result = calculateReadyAt({
+      returnAt: '2026-11-16T12:00:00+07:00',
+      actualReturnAt: null,
+      now: '2026-11-16T11:00:00+07:00',
+    });
+    expect(new Date(result.readyAt).toISOString()).toBe(
+      new Date('2026-11-16T14:00:00+07:00').toISOString(),
+    );
+  });
+
+  it('does not extend when actualReturnAt is known even if now is later', () => {
+    const result = calculateReadyAt({
+      returnAt: '2026-11-16T12:00:00+07:00',
+      actualReturnAt: '2026-11-16T13:00:00+07:00',
+      now: '2026-11-16T15:00:00+07:00',
+    });
+    expect(new Date(result.readyAt).toISOString()).toBe(
+      new Date('2026-11-16T14:00:00+07:00').toISOString(),
+    );
+  });
 });
 
 describe('calculateAvailableQuantity (BL-06)', () => {

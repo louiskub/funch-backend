@@ -71,6 +71,8 @@ describe('Booking API (isolated PostgreSQL)', () => {
     const pickupAt = future(3);
     const returnAt = future(4);
     const checkoutKey = randomUUID();
+    const customerEmail = `${randomUUID()}@booking.test`;
+    const customerPassword = 'long-enough-booking-password';
     const response = await request(app.getHttpServer())
       .post('/api/bookings/register-checkout')
       .set('Origin', origin)
@@ -81,8 +83,8 @@ describe('Booking API (isolated PostgreSQL)', () => {
         options,
         checkoutKey,
         customerName: 'Booking Customer',
-        customerEmail: `${randomUUID()}@booking.test`,
-        customerPassword: 'long-enough-booking-password',
+        customerEmail,
+        customerPassword,
         customerPhone: '+66123456789',
       })
       .expect(201);
@@ -90,12 +92,37 @@ describe('Booking API (isolated PostgreSQL)', () => {
       id: response.body.data.id as string,
       cookie: response.headers['set-cookie'][0].split(';')[0],
       input: { offerId, pickupAt, returnAt, options, checkoutKey },
+      customerEmail,
+      customerPassword,
     };
   }
 
   it('quotes on the server and creates one pending booking for repeated checkout submissions', async () => {
     const item = await createBooking();
     expect(item.id).toBeTruthy();
+    await request(app.getHttpServer())
+      .post('/api/bookings/register-checkout')
+      .set('Origin', origin)
+      .send({
+        ...item.input,
+        customerEmail: item.customerEmail,
+        customerPassword: 'wrong-password-that-is-long',
+      })
+      .expect(401);
+    const retry = await request(app.getHttpServer())
+      .post('/api/bookings/register-checkout')
+      .set('Origin', origin)
+      .send({
+        ...item.input,
+        customerEmail: item.customerEmail,
+        customerPassword: item.customerPassword,
+      })
+      .expect(201);
+    expect(retry.body.data.id).toBe(item.id);
+    await request(app.getHttpServer())
+      .get(`/api/bookings/${item.id}`)
+      .set('Cookie', retry.headers['set-cookie'][0].split(';')[0])
+      .expect(200);
     await request(app.getHttpServer())
       .post('/api/bookings')
       .set('Origin', origin)
@@ -307,6 +334,17 @@ describe('Booking API (isolated PostgreSQL)', () => {
       [item.id],
     );
     await request(app.getHttpServer())
+      .post(`/api/admin/bookings/${item.id}/confirm-return`)
+      .set('Cookie', adminCookie)
+      .expect(409);
+    const preview = await request(app.getHttpServer())
+      .get(`/api/admin/bookings/${item.id}/return-preview`)
+      .set('Cookie', adminCookie)
+      .expect(200);
+    expect(Number(preview.body.data.projectedFinalAmount)).toBeGreaterThan(
+      Number(preview.body.data.bookingAmount),
+    );
+    await request(app.getHttpServer())
       .post(`/api/admin/bookings/${item.id}/return`)
       .set('Cookie', adminCookie)
       .send({
@@ -315,6 +353,10 @@ describe('Booking API (isolated PostgreSQL)', () => {
         ],
       })
       .expect(201);
+    await request(app.getHttpServer())
+      .get(`/api/admin/bookings/${item.id}/return-preview`)
+      .set('Cookie', adminCookie)
+      .expect(409);
     const repeated = await request(app.getHttpServer())
       .post(`/api/admin/bookings/${item.id}/return`)
       .set('Cookie', adminCookie)
@@ -340,6 +382,19 @@ describe('Booking API (isolated PostgreSQL)', () => {
       .post(`/api/admin/bookings/${item.id}/charges/${chargeId}/confirm`)
       .set('Cookie', adminCookie)
       .expect(201);
+    const review = await request(app.getHttpServer())
+      .get('/api/admin/bookings')
+      .set('Cookie', adminCookie)
+      .expect(200);
+    expect(review.body.data).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: item.id,
+          actualReturnAt: expect.any(String),
+          finalAmount: expect.any(String),
+        }),
+      ]),
+    );
     await request(app.getHttpServer())
       .post(`/api/admin/bookings/${item.id}/confirm-return`)
       .set('Cookie', adminCookie)

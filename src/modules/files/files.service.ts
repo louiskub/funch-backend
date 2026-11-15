@@ -104,21 +104,25 @@ export class FilesService {
       throw error;
     }
     try {
-      const rows = await this.dataSource.query<FileAssetRow[]>(
-        `INSERT INTO file_asset (id, object_key, original_name, mime_type, size_bytes, visibility, uploaded_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7)
-         RETURNING id, original_name AS "originalName", mime_type AS "mimeType", size_bytes AS "sizeBytes", visibility, object_key AS "objectKey"`,
-        [
+      const result = await this.dataSource
+        .createQueryBuilder()
+        .insert()
+        .into('file_asset')
+        .values({
           id,
-          key,
-          file.originalname.replace(/^.*[\\/]/, '').slice(0, 255) || 'image',
-          type.mime,
-          file.buffer.length,
+          object_key: key,
+          original_name:
+            file.originalname.replace(/^.*[\\/]/, '').slice(0, 255) || 'image',
+          mime_type: type.mime,
+          size_bytes: file.buffer.length,
           visibility,
-          userId,
-        ],
-      );
-      return asset(rows[0], this.storage);
+          uploaded_by: userId,
+        })
+        .returning(
+          'id, original_name AS "originalName", mime_type AS "mimeType", size_bytes AS "sizeBytes", visibility, object_key AS "objectKey"',
+        )
+        .execute();
+      return asset(result.raw[0] as FileAssetRow, this.storage);
     } catch (error) {
       try {
         await this.storage.remove(key);
@@ -133,21 +137,30 @@ export class FilesService {
   }
 
   async listPublic() {
-    const rows = await this.dataSource.query<FileAssetRow[]>(
-      `SELECT id, original_name AS "originalName", mime_type AS "mimeType", size_bytes AS "sizeBytes", visibility, object_key AS "objectKey"
-       FROM file_asset WHERE visibility = 'PUBLIC' ORDER BY created_at DESC`,
-    );
+    const rows = await this.dataSource
+      .createQueryBuilder()
+      .select([
+        'f.id AS id',
+        'f.original_name AS "originalName"',
+        'f.mime_type AS "mimeType"',
+        'f.size_bytes AS "sizeBytes"',
+        'f.visibility AS visibility',
+        'f.object_key AS "objectKey"',
+      ])
+      .from('file_asset', 'f')
+      .where('f.visibility = :visibility', { visibility: 'PUBLIC' })
+      .orderBy('f.created_at', 'DESC')
+      .getRawMany<FileAssetRow>();
     return rows.map((row) => asset(row, this.storage));
   }
 
   async signedGet(id: string) {
-    const rows = await this.dataSource.query<
-      { objectKey: string; visibility: string }[]
-    >(
-      'SELECT object_key AS "objectKey", visibility FROM file_asset WHERE id = $1',
-      [id],
-    );
-    const file = rows[0];
+    const file = await this.dataSource
+      .createQueryBuilder()
+      .select(['f.object_key AS "objectKey"', 'f.visibility AS visibility'])
+      .from('file_asset', 'f')
+      .where('f.id = :id', { id })
+      .getRawOne<{ objectKey: string; visibility: string }>();
     if (!file) throw new NotFoundException('File not found');
     if (file.visibility !== 'PRIVATE')
       throw new BadRequestException('Only private files use signed downloads');
@@ -159,21 +172,32 @@ export class FilesService {
 
   async delete(id: string) {
     const file = await this.dataSource.transaction(async (manager) => {
-      const rows = await manager.query<{ objectKey: string }[]>(
-        'SELECT object_key AS "objectKey" FROM file_asset WHERE id = $1 FOR UPDATE',
-        [id],
-      );
-      if (!rows[0]) throw new NotFoundException('File not found');
-      const references = await manager.query<Record<string, unknown>[]>(
-        'SELECT 1 FROM car_type WHERE image_file_ids @> ARRAY[$1::uuid] LIMIT 1',
-        [id],
-      );
+      const file = await manager
+        .createQueryBuilder()
+        .select('f.object_key', 'objectKey')
+        .from('file_asset', 'f')
+        .where('f.id = :id', { id })
+        .setLock('pessimistic_write')
+        .getRawOne<{ objectKey: string }>();
+      if (!file) throw new NotFoundException('File not found');
+      const references = await manager
+        .createQueryBuilder()
+        .select('t.id')
+        .from('car_type', 't')
+        .where('t.image_file_ids @> ARRAY[:id]::uuid[]', { id })
+        .limit(1)
+        .getRawMany();
       if (references.length)
         throw new ConflictException(
           'Remove this image from every gallery before deleting it',
         );
-      await manager.query('DELETE FROM file_asset WHERE id = $1', [id]);
-      return rows[0];
+      await manager
+        .createQueryBuilder()
+        .delete()
+        .from('file_asset')
+        .where('id = :id', { id })
+        .execute();
+      return file;
     });
     try {
       await this.storage.remove(file.objectKey);
@@ -190,19 +214,28 @@ export class FilesService {
     if (new Set(ids).size !== ids.length)
       throw new BadRequestException('Gallery image IDs must be unique');
     return this.dataSource.transaction(async (manager) => {
-      const types = await manager.query<{ imageFileIds: string[] }[]>(
-        'SELECT image_file_ids AS "imageFileIds" FROM car_type WHERE id = $1 FOR UPDATE',
-        [carTypeId],
-      );
-      if (!types[0]) throw new NotFoundException('Car type not found');
-      const lockedIds = [...new Set([...types[0].imageFileIds, ...ids])].sort();
+      const type = await manager
+        .createQueryBuilder()
+        .select('t.image_file_ids', 'imageFileIds')
+        .from('car_type', 't')
+        .where('t.id = :carTypeId', { carTypeId })
+        .setLock('pessimistic_write')
+        .getRawOne<{ imageFileIds: string[] }>();
+      if (!type) throw new NotFoundException('Car type not found');
+      const lockedIds = [...new Set([...type.imageFileIds, ...ids])].sort();
       if (lockedIds.length) {
-        const files = await manager.query<
-          { id: string; visibility: string; mimeType: string }[]
-        >(
-          `SELECT id, visibility, mime_type AS "mimeType" FROM file_asset WHERE id = ANY($1::uuid[]) ORDER BY id FOR UPDATE`,
-          [lockedIds],
-        );
+        const files = await manager
+          .createQueryBuilder()
+          .select([
+            'f.id AS id',
+            'f.visibility AS visibility',
+            'f.mime_type AS "mimeType"',
+          ])
+          .from('file_asset', 'f')
+          .where('f.id IN (:...lockedIds)', { lockedIds })
+          .orderBy('f.id')
+          .setLock('pessimistic_write')
+          .getRawMany<{ id: string; visibility: string; mimeType: string }>();
         if (files.length !== lockedIds.length)
           throw new BadRequestException('Gallery contains an unknown image');
         if (
@@ -216,14 +249,14 @@ export class FilesService {
             'Only public images can be added to a gallery',
           );
       }
-      const [rows] = await manager.query<
-        [{ id: string; imageFileIds: string[] }[], number]
-      >(
-        `UPDATE car_type SET image_file_ids = $2::uuid[], updated_at = now() WHERE id = $1
-         RETURNING id, image_file_ids AS "imageFileIds"`,
-        [carTypeId, ids],
-      );
-      return rows[0];
+      const result = await manager
+        .createQueryBuilder()
+        .update('car_type')
+        .set({ image_file_ids: ids, updated_at: () => 'now()' })
+        .where('id = :carTypeId', { carTypeId })
+        .returning('id, image_file_ids AS "imageFileIds"')
+        .execute();
+      return result.raw[0] as { id: string; imageFileIds: string[] };
     });
   }
 }

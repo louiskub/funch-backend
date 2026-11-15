@@ -68,41 +68,79 @@ async function seedDemo() {
     await seedMain(db);
     await db.transaction(async (manager) => {
       const demoIds = DEMO_USERS.map((user) => user.id);
-      await manager.query(
-        `DELETE FROM additional_charge WHERE booking_id IN (SELECT id FROM booking WHERE user_id=ANY($1::uuid[]))`,
-        [demoIds],
-      );
-      await manager.query(`DELETE FROM booking WHERE user_id=ANY($1::uuid[])`, [
-        demoIds,
-      ]);
-      await manager.query(
-        `DELETE FROM user_session WHERE user_id=ANY($1::uuid[])`,
-        [demoIds],
-      );
-      await manager.query(`DELETE FROM app_user WHERE id=ANY($1::uuid[])`, [
-        demoIds,
-      ]);
-      await manager.query(`DELETE FROM car_option WHERE id=ANY($1::uuid[])`, [
-        DEMO_OPTIONS.map((option) => option.id),
-      ]);
+      const oldBookings = await manager
+        .createQueryBuilder()
+        .select('b.id', 'id')
+        .from('booking', 'b')
+        .where('b.user_id IN (:...demoIds)', { demoIds })
+        .getRawMany<{ id: string }>();
+      const oldBookingIds = oldBookings.map(({ id }) => id);
+      if (oldBookingIds.length)
+        await manager
+          .createQueryBuilder()
+          .delete()
+          .from('additional_charge')
+          .where('booking_id IN (:...oldBookingIds)', { oldBookingIds })
+          .execute();
+      await manager
+        .createQueryBuilder()
+        .delete()
+        .from('booking')
+        .where('user_id IN (:...demoIds)', { demoIds })
+        .execute();
+      await manager
+        .createQueryBuilder()
+        .delete()
+        .from('user_session')
+        .where('user_id IN (:...demoIds)', { demoIds })
+        .execute();
+      await manager
+        .createQueryBuilder()
+        .delete()
+        .from('app_user')
+        .where('id IN (:...demoIds)', { demoIds })
+        .execute();
+      await manager
+        .createQueryBuilder()
+        .delete()
+        .from('car_option')
+        .where('id IN (:...optionIds)', {
+          optionIds: DEMO_OPTIONS.map((option) => option.id),
+        })
+        .execute();
       const passwords = new PasswordService();
       for (const user of DEMO_USERS)
-        await manager.query(
-          `INSERT INTO app_user(id,email,password_hash,name,phone,role,is_suspended) VALUES($1,$2,$3,$4,$5,$6,false)`,
-          [
-            user.id,
-            user.email,
-            await passwords.hash('FunchDemo2026!'),
-            user.name,
-            user.phone,
-            user.role,
-          ],
-        );
+        await manager
+          .createQueryBuilder()
+          .insert()
+          .into('app_user')
+          .values({
+            id: user.id,
+            email: user.email,
+            password_hash: await passwords.hash('FunchDemo2026!'),
+            name: user.name,
+            phone: user.phone,
+            role: user.role,
+            is_suspended: false,
+          })
+          .execute();
       for (const option of DEMO_OPTIONS)
-        await manager.query(
-          `INSERT INTO car_option(id,branch_id,code,name,description,category,pricing_type,price,quantity_stock) VALUES($1,$2,$3,'Demo child seat','One unit available for the demo','EQUIPMENT','PER_UNIT_PER_DAY',$4,$5)`,
-          [option.id, option.branch, option.code, option.price, option.stock],
-        );
+        await manager
+          .createQueryBuilder()
+          .insert()
+          .into('car_option')
+          .values({
+            id: option.id,
+            branch_id: option.branch,
+            code: option.code,
+            name: 'Demo child seat',
+            description: 'One unit available for the demo',
+            category: 'EQUIPMENT',
+            pricing_type: 'PER_UNIT_PER_DAY',
+            price: option.price,
+            quantity_stock: option.stock,
+          })
+          .execute();
 
       const fixtures = [
         {
@@ -168,12 +206,20 @@ async function seedDemo() {
       ];
       for (let index = 0; index < fixtures.length; index++) {
         const fixture = fixtures[index];
-        const offer = (
-          await manager.query<Record<string, string>[]>(
-            `SELECT o.id,o.branch_id AS branch,o.base_daily_rate::text AS daily,o.base_hourly_rate::text AS hourly,o.currency_code AS currency,b.timezone FROM car_type_branch o JOIN branch b ON b.id=o.branch_id WHERE o.id=$1`,
-            [fixture.offer],
-          )
-        )[0];
+        const offer = await manager
+          .createQueryBuilder()
+          .select([
+            'o.id AS id',
+            'o.branch_id AS branch',
+            'o.base_daily_rate::text AS daily',
+            'o.base_hourly_rate::text AS hourly',
+            'o.currency_code AS currency',
+            'b.timezone AS timezone',
+          ])
+          .from('car_type_branch', 'o')
+          .innerJoin('branch', 'b', 'b.id = o.branch_id')
+          .where('o.id = :offerId', { offerId: fixture.offer })
+          .getRawOne<Record<string, string>>();
         const rental = calculateRentalPrice({
           pickupAt: fixture.pickup,
           returnAt: fixture.ret,
@@ -198,60 +244,81 @@ async function seedDemo() {
           optionPrices: line ? [line.totalAmount] : [],
         });
         const id = BOOKING_IDS[index];
-        await manager.query(
-          `INSERT INTO booking(id,booking_number,checkout_key,user_id,car_type_branch_id,car_id,pickup_branch_id,return_branch_id,pickup_at,return_at,actual_return_at,status,currency_code,daily_rate_at_booking,hourly_rate_at_booking,charged_days,charged_hours,rental_subtotal,options_subtotal,total_amount,approved_by,approved_at,rejection_reason,cancellation_reason)
-           VALUES($1,$2,$3,$4,$5,$6,$7,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)`,
-          [
+        await manager
+          .createQueryBuilder()
+          .insert()
+          .into('booking')
+          .values({
             id,
-            `DEMO-${String(index + 1).padStart(3, '0')}`,
-            randomUUID(),
-            DEMO_USERS[0].id,
-            fixture.offer,
-            fixture.car,
-            offer.branch,
-            fixture.pickup,
-            fixture.ret,
-            fixture.actual,
-            fixture.status,
-            offer.currency,
-            offer.daily,
-            offer.hourly,
-            rental.chargedDays,
-            rental.chargedHours,
-            total.rentalSubtotal.amount,
-            total.optionsSubtotal.amount,
-            total.totalAmount.amount,
-            fixture.status === 'APPROVED' ||
-            fixture.status === 'IN_USE' ||
-            fixture.status === 'COMPLETED'
-              ? DEMO_USERS[1].id
-              : null,
-            fixture.status === 'APPROVED' ||
-            fixture.status === 'IN_USE' ||
-            fixture.status === 'COMPLETED'
-              ? new Date()
-              : null,
-            fixture.status === 'REJECTED' ? fixture.reason : null,
-            fixture.status === 'CANCELLED' ? fixture.reason : null,
-          ],
-        );
+            booking_number: `DEMO-${String(index + 1).padStart(3, '0')}`,
+            checkout_key: randomUUID(),
+            user_id: DEMO_USERS[0].id,
+            car_type_branch_id: fixture.offer,
+            car_id: fixture.car,
+            pickup_branch_id: offer.branch,
+            return_branch_id: offer.branch,
+            pickup_at: fixture.pickup,
+            return_at: fixture.ret,
+            actual_return_at: fixture.actual,
+            status: fixture.status,
+            currency_code: offer.currency,
+            daily_rate_at_booking: offer.daily,
+            hourly_rate_at_booking: offer.hourly,
+            charged_days: rental.chargedDays,
+            charged_hours: rental.chargedHours,
+            rental_subtotal: total.rentalSubtotal.amount,
+            options_subtotal: total.optionsSubtotal.amount,
+            total_amount: total.totalAmount.amount,
+            approved_by:
+              fixture.status === 'APPROVED' ||
+              fixture.status === 'IN_USE' ||
+              fixture.status === 'COMPLETED'
+                ? DEMO_USERS[1].id
+                : null,
+            approved_at:
+              fixture.status === 'APPROVED' ||
+              fixture.status === 'IN_USE' ||
+              fixture.status === 'COMPLETED'
+                ? new Date()
+                : null,
+            rejection_reason:
+              fixture.status === 'REJECTED' ? fixture.reason : null,
+            cancellation_reason:
+              fixture.status === 'CANCELLED' ? fixture.reason : null,
+          })
+          .execute();
         if (fixture.option && line)
-          await manager.query(
-            `INSERT INTO booking_option(id,booking_id,car_option_id,quantity,unit_price_at_booking,charged_units,total_amount) VALUES($1,$2,$3,1,$4,$5,$6)`,
-            [
-              randomUUID(),
-              id,
-              fixture.option.id,
-              fixture.option.price,
-              line.chargedUnits,
-              line.totalAmount.amount,
-            ],
-          );
+          await manager
+            .createQueryBuilder()
+            .insert()
+            .into('booking_option')
+            .values({
+              id: randomUUID(),
+              booking_id: id,
+              car_option_id: fixture.option.id,
+              quantity: 1,
+              unit_price_at_booking: fixture.option.price,
+              charged_units: line.chargedUnits,
+              total_amount: line.totalAmount.amount,
+            })
+            .execute();
         if (fixture.status === 'COMPLETED')
-          await manager.query(
-            `INSERT INTO additional_charge(id,booking_id,type,description,quantity,unit_price,amount,status,created_by) VALUES($1,$2,'DAMAGE','Demo confirmed damage charge',1,'250.00','250.00','CONFIRMED',$3)`,
-            [randomUUID(), id, DEMO_USERS[1].id],
-          );
+          await manager
+            .createQueryBuilder()
+            .insert()
+            .into('additional_charge')
+            .values({
+              id: randomUUID(),
+              booking_id: id,
+              type: 'DAMAGE',
+              description: 'Demo confirmed damage charge',
+              quantity: 1,
+              unit_price: '250.00',
+              amount: '250.00',
+              status: 'CONFIRMED',
+              created_by: DEMO_USERS[1].id,
+            })
+            .execute();
       }
     });
     process.stdout.write(

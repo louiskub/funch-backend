@@ -39,33 +39,57 @@ export class AdminFleetService {
   constructor(private readonly dataSource: DataSource) {}
 
   async branches() {
-    return this.dataSource.query<Record<string, unknown>[]>(
-      `SELECT b.id, b.code, b.name, b.city, b.is_active AS "isActive", c.code AS "countryCode", c.currency_code AS "currencyCode"
-       FROM branch b JOIN country c ON c.id = b.country_id ORDER BY c.name, b.name`,
-    );
+    return this.dataSource
+      .createQueryBuilder()
+      .select([
+        'b.id AS id',
+        'b.code AS code',
+        'b.name AS name',
+        'b.city AS city',
+        'b.is_active AS "isActive"',
+        'c.code AS "countryCode"',
+        'c.currency_code AS "currencyCode"',
+      ])
+      .from('branch', 'b')
+      .innerJoin('country', 'c', 'c.id = b.country_id')
+      .orderBy('c.name')
+      .addOrderBy('b.name')
+      .getRawMany();
   }
 
   async carTypes() {
-    return this.dataSource.query<Record<string, unknown>[]>(
-      `SELECT id, brand, model, seats, transmission, fuel_type AS "fuelType", features, image_file_ids AS "imageFileIds", is_active AS "isActive"
-       FROM car_type ORDER BY brand, model`,
-    );
+    return this.dataSource
+      .createQueryBuilder()
+      .select([
+        't.id AS id',
+        't.brand AS brand',
+        't.model AS model',
+        't.seats AS seats',
+        't.transmission AS transmission',
+        't.fuel_type AS "fuelType"',
+        't.features AS features',
+        't.image_file_ids AS "imageFileIds"',
+        't.is_active AS "isActive"',
+      ])
+      .from('car_type', 't')
+      .orderBy('t.brand')
+      .addOrderBy('t.model')
+      .getRawMany();
   }
 
   async createCarType(input: CarTypeDto) {
     return this.insert(
-      `INSERT INTO car_type (id, brand, model, seats, transmission, fuel_type, features)
-       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id, brand, model, seats, transmission,
-       fuel_type AS "fuelType", features, is_active AS "isActive"`,
-      [
-        randomUUID(),
-        input.brand.trim(),
-        input.model.trim(),
-        input.seats,
-        input.transmission,
-        input.fuelType,
-        input.features,
-      ],
+      'car_type',
+      {
+        id: randomUUID(),
+        brand: input.brand.trim(),
+        model: input.model.trim(),
+        seats: input.seats,
+        transmission: input.transmission,
+        fuel_type: input.fuelType,
+        features: input.features,
+      },
+      'id, brand, model, seats, transmission, fuel_type AS "fuelType", features, is_active AS "isActive"',
     );
   }
 
@@ -80,28 +104,42 @@ export class AdminFleetService {
   }
 
   async offers() {
-    return this.dataSource.query<Record<string, unknown>[]>(
-      `SELECT o.id, o.car_type_id AS "carTypeId", t.brand, t.model, o.branch_id AS "branchId",
-       b.name AS "branchName", b.city, o.base_daily_rate::text AS "baseDailyRate",
-       o.base_hourly_rate::text AS "baseHourlyRate", o.currency_code AS "currencyCode",
-       o.is_active AS "isActive" FROM car_type_branch o JOIN car_type t ON t.id=o.car_type_id
-       JOIN branch b ON b.id=o.branch_id ORDER BY b.name, t.brand, t.model`,
-    );
+    return this.dataSource
+      .createQueryBuilder()
+      .select([
+        'o.id AS id',
+        'o.car_type_id AS "carTypeId"',
+        't.brand AS brand',
+        't.model AS model',
+        'o.branch_id AS "branchId"',
+        'b.name AS "branchName"',
+        'b.city AS city',
+        'o.base_daily_rate::text AS "baseDailyRate"',
+        'o.base_hourly_rate::text AS "baseHourlyRate"',
+        'o.currency_code AS "currencyCode"',
+        'o.is_active AS "isActive"',
+      ])
+      .from('car_type_branch', 'o')
+      .innerJoin('car_type', 't', 't.id = o.car_type_id')
+      .innerJoin('branch', 'b', 'b.id = o.branch_id')
+      .orderBy('b.name')
+      .addOrderBy('t.brand')
+      .addOrderBy('t.model')
+      .getRawMany();
   }
 
   async createOffer(input: OfferDto) {
     return this.insert(
-      `INSERT INTO car_type_branch (id, car_type_id, branch_id, base_daily_rate, base_hourly_rate, currency_code)
-       VALUES ($1,$2,$3,$4,$5,$6) RETURNING id, car_type_id AS "carTypeId", branch_id AS "branchId",
-       base_daily_rate::text AS "baseDailyRate", base_hourly_rate::text AS "baseHourlyRate", currency_code AS "currencyCode", is_active AS "isActive"`,
-      [
-        randomUUID(),
-        input.carTypeId,
-        input.branchId,
-        input.baseDailyRate,
-        input.baseHourlyRate,
-        input.currencyCode,
-      ],
+      'car_type_branch',
+      {
+        id: randomUUID(),
+        car_type_id: input.carTypeId,
+        branch_id: input.branchId,
+        base_daily_rate: input.baseDailyRate,
+        base_hourly_rate: input.baseHourlyRate,
+        currency_code: input.currencyCode,
+      },
+      'id, car_type_id AS "carTypeId", branch_id AS "branchId", base_daily_rate::text AS "baseDailyRate", base_hourly_rate::text AS "baseHourlyRate", currency_code AS "currencyCode", is_active AS "isActive"',
     );
   }
 
@@ -116,28 +154,44 @@ export class AdminFleetService {
   }
 
   async cars() {
-    return this.dataSource.query<Record<string, unknown>[]>(
-      `SELECT c.id, c.car_type_branch_id AS "carTypeBranchId", t.brand, t.model, b.name AS "branchName",
-       c.vin, c.license_plate AS "licensePlate", c.year, c.buy_date::text AS "buyDate", c.status
-       FROM car c JOIN car_type_branch o ON o.id=c.car_type_branch_id JOIN car_type t ON t.id=o.car_type_id
-       JOIN branch b ON b.id=o.branch_id ORDER BY b.name, t.brand, t.model, c.license_plate`,
-    );
+    return this.dataSource
+      .createQueryBuilder()
+      .select([
+        'c.id AS id',
+        'c.car_type_branch_id AS "carTypeBranchId"',
+        't.brand AS brand',
+        't.model AS model',
+        'b.name AS "branchName"',
+        'c.vin AS vin',
+        'c.license_plate AS "licensePlate"',
+        'c.year AS year',
+        'c.buy_date::text AS "buyDate"',
+        'c.status AS status',
+      ])
+      .from('car', 'c')
+      .innerJoin('car_type_branch', 'o', 'o.id = c.car_type_branch_id')
+      .innerJoin('car_type', 't', 't.id = o.car_type_id')
+      .innerJoin('branch', 'b', 'b.id = o.branch_id')
+      .orderBy('b.name')
+      .addOrderBy('t.brand')
+      .addOrderBy('t.model')
+      .addOrderBy('c.license_plate')
+      .getRawMany();
   }
 
   async createCar(input: CarDto) {
     return this.insert(
-      `INSERT INTO car (id, car_type_branch_id, vin, license_plate, year, buy_date, status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id, car_type_branch_id AS "carTypeBranchId", vin,
-       license_plate AS "licensePlate", year, buy_date::text AS "buyDate", status`,
-      [
-        randomUUID(),
-        input.carTypeBranchId,
-        input.vin.trim(),
-        input.licensePlate.trim(),
-        input.year,
-        input.buyDate ?? null,
-        input.status,
-      ],
+      'car',
+      {
+        id: randomUUID(),
+        car_type_branch_id: input.carTypeBranchId,
+        vin: input.vin.trim(),
+        license_plate: input.licensePlate.trim(),
+        year: input.year,
+        buy_date: input.buyDate ?? null,
+        status: input.status,
+      },
+      'id, car_type_branch_id AS "carTypeBranchId", vin, license_plate AS "licensePlate", year, buy_date::text AS "buyDate", status',
     );
   }
 
@@ -151,11 +205,20 @@ export class AdminFleetService {
     );
   }
 
-  private async insert(sql: string, values: unknown[]) {
+  private async insert(
+    table: string,
+    values: Record<string, unknown>,
+    returning: string,
+  ) {
     try {
-      return (
-        await this.dataSource.query<Record<string, unknown>[]>(sql, values)
-      )[0];
+      const result = await this.dataSource
+        .createQueryBuilder()
+        .insert()
+        .into(table)
+        .values(values)
+        .returning(returning)
+        .execute();
+      return result.raw[0] as Record<string, unknown>;
     } catch (error) {
       this.translate(error);
     }
@@ -178,21 +241,24 @@ export class AdminFleetService {
     );
     if (!filtered.length)
       throw new BadRequestException('Provide at least one field to update');
-    const assignments = filtered.map(
-      ([key], index) =>
-        `${columns[key as keyof typeof columns]} = $${index + 1}`,
+    const values = Object.fromEntries(
+      filtered.map(([key, value]) => [
+        columns[key as keyof typeof columns],
+        value,
+      ]),
     );
     if (table === 'car_type' && filtered.some(([key]) => key !== 'isActive'))
-      assignments.push('updated_at = now()');
+      Object.assign(values, { updated_at: () => 'now()' });
     try {
-      const [rows] = await this.dataSource.query<
-        [Record<string, unknown>[], number]
-      >(
-        `UPDATE ${table} SET ${assignments.join(', ')} WHERE id = $${filtered.length + 1} RETURNING ${returning}`,
-        [...filtered.map(([, value]) => value), id],
-      );
-      if (!rows[0]) throw new NotFoundException('Record not found');
-      return rows[0];
+      const result = await this.dataSource
+        .createQueryBuilder()
+        .update(table)
+        .set(values)
+        .where('id = :id', { id })
+        .returning(returning)
+        .execute();
+      if (!result.raw[0]) throw new NotFoundException('Record not found');
+      return result.raw[0] as Record<string, unknown>;
     } catch (error) {
       this.translate(error);
     }

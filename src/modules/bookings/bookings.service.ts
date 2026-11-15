@@ -4,6 +4,7 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { DataSource, EntityManager } from 'typeorm';
@@ -87,13 +88,26 @@ export class BookingsService {
     const returnAt = instant(input.returnAt);
     if (Date.parse(returnAt) <= Date.parse(pickupAt))
       throw new BadRequestException('Return must be after pickup');
-    const offers = await manager.query<Record<string, any>[]>(
-      `SELECT o.id, o.branch_id AS "branchId", o.base_hourly_rate::text AS hourly, o.base_daily_rate::text AS daily, o.currency_code AS currency, b.timezone
-       FROM car_type_branch o JOIN branch b ON b.id=o.branch_id JOIN car_type t ON t.id=o.car_type_id
-       WHERE o.id=$1 AND o.is_active AND b.is_active AND t.is_active`,
-      [input.offerId],
-    );
-    const offer = offers[0];
+    const offer = await manager
+      .createQueryBuilder()
+      .select([
+        'o.id AS id',
+        'o.branch_id AS "branchId"',
+        'o.base_hourly_rate::text AS hourly',
+        'o.base_daily_rate::text AS daily',
+        'o.currency_code AS currency',
+        'b.timezone AS timezone',
+      ])
+      .from('car_type_branch', 'o')
+      .innerJoin('branch', 'b', 'b.id = o.branch_id')
+      .innerJoin('car_type', 't', 't.id = o.car_type_id')
+      .where(
+        'o.id = :offerId AND o.is_active AND b.is_active AND t.is_active',
+        {
+          offerId: input.offerId,
+        },
+      )
+      .getRawOne<Record<string, any>>();
     if (!offer) throw new NotFoundException('Car offer not found');
     const rental = calculateRentalPrice({
       pickupAt,
@@ -107,11 +121,25 @@ export class BookingsService {
       throw new BadRequestException('Each option may be selected once');
     const lines: QuoteResult['options'] = [];
     for (const item of selected) {
-      const rows = await manager.query<PriceRow[]>(
-        `SELECT id, pricing_type AS "pricingType", quantity_stock AS "quantityStock", price::text, $2::char(3) AS currency FROM car_option WHERE id=$1 AND branch_id=$3 AND is_active`,
-        [item.carOptionId, offer.currency, offer.branchId],
-      );
-      const option = rows[0];
+      const option = await manager
+        .createQueryBuilder()
+        .select([
+          'co.id AS id',
+          'co.pricing_type AS "pricingType"',
+          'co.quantity_stock AS "quantityStock"',
+          'co.price::text AS price',
+          ':currency AS currency',
+        ])
+        .from('car_option', 'co')
+        .where(
+          'co.id = :optionId AND co.branch_id = :branchId AND co.is_active',
+          {
+            optionId: item.carOptionId,
+            branchId: offer.branchId,
+            currency: offer.currency,
+          },
+        )
+        .getRawOne<PriceRow>();
       if (!option)
         throw new BadRequestException(
           'An option is unavailable at this branch',
@@ -122,10 +150,22 @@ export class BookingsService {
         );
       let availableQuantity: number | null = null;
       if (option.quantityStock !== null) {
-        const reservations = await manager.query<Record<string, any>[]>(
-          `SELECT bo.quantity,b.pickup_at AS "pickupAt",COALESCE(b.actual_return_at,b.return_at) AS "returnAt" FROM booking_option bo JOIN booking b ON b.id=bo.booking_id WHERE bo.car_option_id=$1 AND b.status IN ('APPROVED','IN_USE')`,
-          [item.carOptionId],
-        );
+        const reservations = await manager
+          .createQueryBuilder()
+          .select([
+            'bo.quantity AS quantity',
+            'b.pickup_at AS "pickupAt"',
+            'COALESCE(b.actual_return_at, b.return_at) AS "returnAt"',
+          ])
+          .from('booking_option', 'bo')
+          .innerJoin('booking', 'b', 'b.id = bo.booking_id')
+          .where(
+            "bo.car_option_id = :optionId AND b.status IN ('APPROVED','IN_USE')",
+            {
+              optionId: item.carOptionId,
+            },
+          )
+          .getRawMany<Record<string, any>>();
         availableQuantity = calculateAvailableQuantity({
           requestedInterval: { startsAt: pickupAt, endsAt: returnAt },
           capacity: option.quantityStock,
@@ -159,14 +199,18 @@ export class BookingsService {
         currency: offer.currency,
       })),
     });
-    const vehicleCapacity = Number(
-      (
-        await manager.query<Record<string, number>[]>(
-          `SELECT count(*)::int AS count FROM car WHERE car_type_branch_id=$1 AND status='ACTIVE' AND is_active`,
-          [offer.id],
-        )
-      )[0].count,
-    );
+    const capacity = await manager
+      .createQueryBuilder()
+      .select('count(*)::int', 'count')
+      .from('car', 'c')
+      .where(
+        "c.car_type_branch_id = :offerId AND c.status = 'ACTIVE' AND c.is_active",
+        {
+          offerId: offer.id,
+        },
+      )
+      .getRawOne<{ count: number }>();
+    const vehicleCapacity = Number(capacity.count);
     const vehicleAvailability = calculateAvailableQuantity({
       requestedInterval: {
         startsAt: pickupAt,
@@ -200,21 +244,67 @@ export class BookingsService {
       !actor && input.customerEmail
         ? randomBytes(32).toString('base64url')
         : null;
-    let alreadyCheckedOut = false;
     const result = await this.db.transaction(async (manager) => {
-      await manager.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [
-        input.checkoutKey,
-      ]);
-      const existing = (
-        await manager.query<Record<string, string>[]>(
-          `SELECT id,booking_number AS "bookingNumber",status,total_amount::text AS "totalAmount",currency_code AS "currencyCode",user_id AS "userId" FROM booking WHERE checkout_key=$1`,
-          [input.checkoutKey],
-        )
-      )[0];
+      await manager
+        .createQueryBuilder()
+        .select('pg_advisory_xact_lock(hashtext(:key))')
+        .setParameter('key', input.checkoutKey)
+        .getRawOne();
+      const existing = await manager
+        .createQueryBuilder()
+        .select([
+          'b.id AS id',
+          'b.booking_number AS "bookingNumber"',
+          'b.status AS status',
+          'b.total_amount::text AS "totalAmount"',
+          'b.currency_code AS "currencyCode"',
+          'b.user_id AS "userId"',
+        ])
+        .from('booking', 'b')
+        .where('b.checkout_key = :checkoutKey', {
+          checkoutKey: input.checkoutKey,
+        })
+        .getRawOne<Record<string, string>>();
       if (existing) {
-        alreadyCheckedOut = true;
         if (actor && existing.userId !== actor.id)
           throw new ForbiddenException();
+        if (!actor) {
+          const owner = await manager
+            .createQueryBuilder()
+            .select([
+              'u.email AS email',
+              'u.password_hash AS "passwordHash"',
+              'u.is_suspended AS "isSuspended"',
+            ])
+            .from('app_user', 'u')
+            .where('u.id = :userId', { userId: existing.userId })
+            .getRawOne<{
+              email: string;
+              passwordHash: string;
+              isSuspended: boolean;
+            }>();
+          if (
+            !owner ||
+            owner.isSuspended ||
+            owner.email !== input.customerEmail?.trim().toLowerCase() ||
+            !input.customerPassword ||
+            !(await this.passwords.verify(
+              input.customerPassword,
+              owner.passwordHash,
+            ))
+          )
+            throw new UnauthorizedException('Invalid checkout credentials');
+          await manager
+            .createQueryBuilder()
+            .insert()
+            .into('user_session')
+            .values({
+              token_hash: createHash('sha256').update(token!).digest('hex'),
+              user_id: existing.userId,
+              expires_at: () => "now() + interval '14 days'",
+            })
+            .execute();
+        }
         const { userId: _userId, ...booking } = existing;
         void _userId;
         return booking;
@@ -231,72 +321,91 @@ export class BookingsService {
             'Sign in or provide all account fields to register and checkout',
           );
         const email = input.customerEmail.trim().toLowerCase();
-        await manager.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [
-          `account:${email}`,
-        ]);
-        const accountExists = await manager.query(
-          `SELECT id FROM app_user WHERE email=$1`,
-          [email],
-        );
-        if (accountExists.length)
+        await manager
+          .createQueryBuilder()
+          .select('pg_advisory_xact_lock(hashtext(:key))')
+          .setParameter('key', `account:${email}`)
+          .getRawOne();
+        const accountExists = await manager
+          .createQueryBuilder()
+          .select('u.id')
+          .from('app_user', 'u')
+          .where('u.email = :email', { email })
+          .getExists();
+        if (accountExists)
           throw new ConflictException(
             'An account with this email already exists',
           );
         const id = randomUUID();
-        const rows = await manager.query<Record<string, string>[]>(
-          `INSERT INTO app_user(id,email,password_hash,name,phone,role) VALUES($1,$2,$3,$4,$5,'CUSTOMER') RETURNING id`,
-          [
+        const userResult = await manager
+          .createQueryBuilder()
+          .insert()
+          .into('app_user')
+          .values({
             id,
             email,
-            await this.passwords.hash(input.customerPassword),
-            input.customerName.trim(),
-            input.customerPhone.trim(),
-          ],
-        );
-        customerId = rows[0]?.id;
-        await manager.query(
-          `INSERT INTO user_session(token_hash,user_id,expires_at) VALUES($1,$2,now()+interval '14 days')`,
-          [createHash('sha256').update(token!).digest('hex'), customerId],
-        );
+            password_hash: await this.passwords.hash(input.customerPassword),
+            name: input.customerName.trim(),
+            phone: input.customerPhone.trim(),
+            role: 'CUSTOMER',
+          })
+          .returning('id')
+          .execute();
+        customerId = userResult.raw[0]?.id;
+        await manager
+          .createQueryBuilder()
+          .insert()
+          .into('user_session')
+          .values({
+            token_hash: createHash('sha256').update(token!).digest('hex'),
+            user_id: customerId,
+            expires_at: () => "now() + interval '14 days'",
+          })
+          .execute();
       }
       const quote = await this.quote(input, manager);
       const bookingId = randomUUID();
       const bookingNumber = `F${Date.now().toString(36).toUpperCase()}${randomBytes(3).toString('hex').toUpperCase()}`;
-      await manager.query(
-        `INSERT INTO booking(id,booking_number,checkout_key,user_id,car_type_branch_id,pickup_branch_id,return_branch_id,pickup_at,return_at,status,currency_code,daily_rate_at_booking,hourly_rate_at_booking,charged_days,charged_hours,rental_subtotal,options_subtotal,total_amount)
-        VALUES($1,$2,$3,$4,$5,$6,$6,$7,$8,'PENDING',$9,$10,$11,$12,$13,$14,$15,$16)`,
-        [
-          bookingId,
-          bookingNumber,
-          input.checkoutKey,
-          customerId,
-          quote.offerId,
-          quote.branchId,
-          quote.pickupAt,
-          quote.returnAt,
-          quote.currencyCode,
-          quote.dailyRateAtBooking,
-          quote.hourlyRateAtBooking,
-          quote.chargedDays,
-          quote.chargedHours,
-          quote.rentalSubtotal,
-          quote.optionsSubtotal,
-          quote.totalAmount,
-        ],
-      );
+      await manager
+        .createQueryBuilder()
+        .insert()
+        .into('booking')
+        .values({
+          id: bookingId,
+          booking_number: bookingNumber,
+          checkout_key: input.checkoutKey,
+          user_id: customerId,
+          car_type_branch_id: quote.offerId,
+          pickup_branch_id: quote.branchId,
+          return_branch_id: quote.branchId,
+          pickup_at: quote.pickupAt,
+          return_at: quote.returnAt,
+          status: 'PENDING',
+          currency_code: quote.currencyCode,
+          daily_rate_at_booking: quote.dailyRateAtBooking,
+          hourly_rate_at_booking: quote.hourlyRateAtBooking,
+          charged_days: quote.chargedDays,
+          charged_hours: quote.chargedHours,
+          rental_subtotal: quote.rentalSubtotal,
+          options_subtotal: quote.optionsSubtotal,
+          total_amount: quote.totalAmount,
+        })
+        .execute();
       for (const line of quote.options)
-        await manager.query(
-          `INSERT INTO booking_option(id,booking_id,car_option_id,quantity,unit_price_at_booking,charged_units,total_amount) VALUES($1,$2,$3,$4,$5,$6,$7)`,
-          [
-            randomUUID(),
-            bookingId,
-            line.carOptionId,
-            line.quantity,
-            line.unitPrice,
-            line.chargedUnits,
-            line.totalAmount,
-          ],
-        );
+        await manager
+          .createQueryBuilder()
+          .insert()
+          .into('booking_option')
+          .values({
+            id: randomUUID(),
+            booking_id: bookingId,
+            car_option_id: line.carOptionId,
+            quantity: line.quantity,
+            unit_price_at_booking: line.unitPrice,
+            charged_units: line.chargedUnits,
+            total_amount: line.totalAmount,
+          })
+          .execute();
       return {
         id: bookingId,
         bookingNumber,
@@ -307,47 +416,120 @@ export class BookingsService {
     });
     return {
       ...result,
-      ...(token && !alreadyCheckedOut ? { sessionToken: token } : {}),
+      ...(token ? { sessionToken: token } : {}),
     };
   }
 
   async mine(userId: string) {
-    return this.db.query<Record<string, unknown>[]>(
-      `SELECT b.id,b.booking_number AS "bookingNumber",b.status,b.pickup_at AS "pickupAt",b.return_at AS "returnAt",b.total_amount::text AS "totalAmount",b.currency_code AS "currencyCode",t.brand,t.model,br.name AS "branchName"
-      FROM booking b JOIN car_type_branch o ON o.id=b.car_type_branch_id JOIN car_type t ON t.id=o.car_type_id JOIN branch br ON br.id=b.pickup_branch_id WHERE b.user_id=$1 ORDER BY b.created_at DESC`,
-      [userId],
-    );
+    return this.db
+      .createQueryBuilder()
+      .select([
+        'b.id AS id',
+        'b.booking_number AS "bookingNumber"',
+        'b.status AS status',
+        'b.pickup_at AS "pickupAt"',
+        'b.return_at AS "returnAt"',
+        'b.total_amount::text AS "totalAmount"',
+        'b.currency_code AS "currencyCode"',
+        't.brand AS brand',
+        't.model AS model',
+        'br.name AS "branchName"',
+      ])
+      .from('booking', 'b')
+      .innerJoin('car_type_branch', 'o', 'o.id = b.car_type_branch_id')
+      .innerJoin('car_type', 't', 't.id = o.car_type_id')
+      .innerJoin('branch', 'br', 'br.id = b.pickup_branch_id')
+      .where('b.user_id = :userId', { userId })
+      .orderBy('b.created_at', 'DESC')
+      .getRawMany();
   }
 
   async get(id: string, actor: AuthUser) {
-    const rows = await this.db.query<Record<string, any>[]>(
-      `SELECT b.*, b.booking_number AS "bookingNumber", b.user_id AS "userId", b.car_type_branch_id AS "carTypeBranchId", b.car_id AS "carId", b.pickup_at AS "pickupAt", b.return_at AS "returnAt", b.actual_return_at AS "actualReturnAt", b.currency_code AS "currencyCode", b.daily_rate_at_booking::text AS "dailyRateAtBooking", b.hourly_rate_at_booking::text AS "hourlyRateAtBooking", b.charged_days AS "chargedDays", b.charged_hours AS "chargedHours", b.rental_subtotal::text AS "rentalSubtotal", b.options_subtotal::text AS "optionsSubtotal", b.total_amount::text AS "totalAmount", b.rejection_reason AS "rejectionReason", b.cancellation_reason AS "cancellationReason", b.created_at AS "createdAt", t.brand,t.model,br.name AS "branchName"
-      FROM booking b JOIN car_type_branch o ON o.id=b.car_type_branch_id JOIN car_type t ON t.id=o.car_type_id JOIN branch br ON br.id=b.pickup_branch_id WHERE b.id=$1`,
-      [id],
-    );
-    const booking = rows[0];
+    const booking = await this.db
+      .createQueryBuilder()
+      .select([
+        'b.*',
+        'b.booking_number AS "bookingNumber"',
+        'b.user_id AS "userId"',
+        'b.car_type_branch_id AS "carTypeBranchId"',
+        'b.car_id AS "carId"',
+        'b.pickup_at AS "pickupAt"',
+        'b.return_at AS "returnAt"',
+        'b.actual_return_at AS "actualReturnAt"',
+        'b.currency_code AS "currencyCode"',
+        'b.daily_rate_at_booking::text AS "dailyRateAtBooking"',
+        'b.hourly_rate_at_booking::text AS "hourlyRateAtBooking"',
+        'b.charged_days AS "chargedDays"',
+        'b.charged_hours AS "chargedHours"',
+        'b.rental_subtotal::text AS "rentalSubtotal"',
+        'b.options_subtotal::text AS "optionsSubtotal"',
+        'b.total_amount::text AS "totalAmount"',
+        'b.rejection_reason AS "rejectionReason"',
+        'b.cancellation_reason AS "cancellationReason"',
+        'b.created_at AS "createdAt"',
+        't.brand AS brand',
+        't.model AS model',
+        'br.name AS "branchName"',
+      ])
+      .from('booking', 'b')
+      .innerJoin('car_type_branch', 'o', 'o.id = b.car_type_branch_id')
+      .innerJoin('car_type', 't', 't.id = o.car_type_id')
+      .innerJoin('branch', 'br', 'br.id = b.pickup_branch_id')
+      .where('b.id = :id', { id })
+      .getRawOne<Record<string, any>>();
     if (!booking) throw new NotFoundException('Booking not found');
     if (actor.role !== UserRole.ADMIN && booking.userId !== actor.id)
       throw new ForbiddenException();
-    booking.options = await this.db.query(
-      `SELECT bo.id,bo.car_option_id AS "carOptionId",co.name,bo.quantity,bo.unit_price_at_booking::text AS "unitPriceAtBooking",bo.charged_units AS "chargedUnits",bo.total_amount::text AS "totalAmount" FROM booking_option bo JOIN car_option co ON co.id=bo.car_option_id WHERE bo.booking_id=$1`,
-      [id],
-    );
-    booking.charges = await this.db.query(
-      `SELECT id,type,description,booking_option_id AS "bookingOptionId",quantity,unit_price::text AS "unitPrice",amount::text,status,created_at AS "createdAt" FROM additional_charge WHERE booking_id=$1 ORDER BY created_at`,
-      [id],
-    );
+    booking.options = await this.db
+      .createQueryBuilder()
+      .select([
+        'bo.id AS id',
+        'bo.car_option_id AS "carOptionId"',
+        'co.name AS name',
+        'bo.quantity AS quantity',
+        'bo.unit_price_at_booking::text AS "unitPriceAtBooking"',
+        'bo.charged_units AS "chargedUnits"',
+        'bo.total_amount::text AS "totalAmount"',
+      ])
+      .from('booking_option', 'bo')
+      .innerJoin('car_option', 'co', 'co.id = bo.car_option_id')
+      .where('bo.booking_id = :id', { id })
+      .getRawMany();
+    booking.charges = await this.db
+      .createQueryBuilder()
+      .select([
+        'a.id AS id',
+        'a.type AS type',
+        'a.description AS description',
+        'a.booking_option_id AS "bookingOptionId"',
+        'a.quantity AS quantity',
+        'a.unit_price::text AS "unitPrice"',
+        'a.amount::text AS amount',
+        'a.status AS status',
+        'a.created_at AS "createdAt"',
+      ])
+      .from('additional_charge', 'a')
+      .where('a.booking_id = :id', { id })
+      .orderBy('a.created_at')
+      .getRawMany();
     booking.finalAmount = await this.finalAmount(this.db.manager, id);
     return booking;
   }
 
   async cancel(id: string, actor: AuthUser, reason?: string) {
     return this.db.transaction(async (manager) => {
-      const rows = await manager.query<Record<string, any>[]>(
-        `SELECT id,user_id AS "userId",status,pickup_at AS "pickupAt" FROM booking WHERE id=$1 FOR UPDATE`,
-        [id],
-      );
-      const b = rows[0];
+      const b = await manager
+        .createQueryBuilder()
+        .select([
+          'b.id AS id',
+          'b.user_id AS "userId"',
+          'b.status AS status',
+          'b.pickup_at AS "pickupAt"',
+        ])
+        .from('booking', 'b')
+        .where('b.id = :id', { id })
+        .setLock('pessimistic_write')
+        .getRawOne<Record<string, any>>();
       if (!b) throw new NotFoundException('Booking not found');
       const decision = canCancelBooking({
         actor: { role: actor.role, userId: actor.id },
@@ -360,10 +542,17 @@ export class BookingsService {
         cancellationReason: reason ?? null,
       });
       if (!decision.allowed) throw new ConflictException(decision.reason);
-      await manager.query(
-        `UPDATE booking SET status='CANCELLED',cancellation_reason=$2,updated_at=now() WHERE id=$1`,
-        [id, actor.role === UserRole.ADMIN ? reason!.trim() : null],
-      );
+      await manager
+        .createQueryBuilder()
+        .update('booking')
+        .set({
+          status: 'CANCELLED',
+          cancellation_reason:
+            actor.role === UserRole.ADMIN ? reason!.trim() : null,
+          updated_at: () => 'now()',
+        })
+        .where('id = :id', { id })
+        .execute();
       return { id, status: 'CANCELLED' };
     });
   }
@@ -373,10 +562,22 @@ export class BookingsService {
     ctbId: string,
     excludeId?: string,
   ) {
-    const rows = await manager.query<Record<string, any>[]>(
-      `SELECT id,pickup_at AS "pickupAt",return_at AS "returnAt",actual_return_at AS "actualReturnAt",status FROM booking WHERE car_type_branch_id=$1 AND status IN ('APPROVED','IN_USE','COMPLETED') AND ($2::uuid IS NULL OR id<>$2)`,
-      [ctbId, excludeId ?? null],
-    );
+    const query = manager
+      .createQueryBuilder()
+      .select([
+        'b.id AS id',
+        'b.pickup_at AS "pickupAt"',
+        'b.return_at AS "returnAt"',
+        'b.actual_return_at AS "actualReturnAt"',
+        'b.status AS status',
+      ])
+      .from('booking', 'b')
+      .where(
+        "b.car_type_branch_id = :ctbId AND b.status IN ('APPROVED','IN_USE','COMPLETED')",
+        { ctbId },
+      );
+    if (excludeId) query.andWhere('b.id <> :excludeId', { excludeId });
+    const rows = await query.getRawMany<Record<string, any>>();
     return rows.map((b) => ({
       startsAt: new Date(String(b.pickupAt)).toISOString(),
       endsAt: calculateReadyAt({
@@ -390,18 +591,31 @@ export class BookingsService {
   }
 
   private async capacityConflicts(manager: EntityManager, ctbId: string) {
-    const capacity = Number(
-      (
-        await manager.query<Record<string, number>[]>(
-          `SELECT count(*)::int AS count FROM car WHERE car_type_branch_id=$1 AND status='ACTIVE' AND is_active`,
-          [ctbId],
-        )
-      )[0].count,
-    );
-    const rows = await manager.query<Record<string, any>[]>(
-      `SELECT id,pickup_at AS "pickupAt",return_at AS "returnAt",actual_return_at AS "actualReturnAt" FROM booking WHERE car_type_branch_id=$1 AND status IN ('APPROVED','IN_USE','COMPLETED') ORDER BY pickup_at`,
-      [ctbId],
-    );
+    const count = await manager
+      .createQueryBuilder()
+      .select('count(*)::int', 'count')
+      .from('car', 'c')
+      .where(
+        "c.car_type_branch_id = :ctbId AND c.status = 'ACTIVE' AND c.is_active",
+        { ctbId },
+      )
+      .getRawOne<{ count: number }>();
+    const capacity = Number(count.count);
+    const rows = await manager
+      .createQueryBuilder()
+      .select([
+        'b.id AS id',
+        'b.pickup_at AS "pickupAt"',
+        'b.return_at AS "returnAt"',
+        'b.actual_return_at AS "actualReturnAt"',
+      ])
+      .from('booking', 'b')
+      .where(
+        "b.car_type_branch_id = :ctbId AND b.status IN ('APPROVED','IN_USE','COMPLETED')",
+        { ctbId },
+      )
+      .orderBy('b.pickup_at')
+      .getRawMany<Record<string, any>>();
     const intervals = rows.map((row) => ({
       id: String(row.id),
       startsAt: new Date(String(row.pickupAt)).toISOString(),
@@ -427,35 +641,103 @@ export class BookingsService {
   }
 
   async queue(status?: string) {
-    return this.db.query<Record<string, unknown>[]>(
-      `SELECT b.id,b.booking_number AS "bookingNumber",b.status,b.pickup_at AS "pickupAt",b.return_at AS "returnAt",b.total_amount::text AS "totalAmount",b.currency_code AS "currencyCode",u.name AS "customerName",u.email AS "customerEmail",t.brand,t.model,br.name AS "branchName",
-        COALESCE((SELECT json_agg(json_build_object('id',a.id,'type',a.type,'description',a.description,'amount',a.amount::text,'status',a.status) ORDER BY a.created_at) FROM additional_charge a WHERE a.booking_id=b.id),'[]'::json) AS charges
-       FROM booking b JOIN app_user u ON u.id=b.user_id JOIN car_type_branch o ON o.id=b.car_type_branch_id JOIN car_type t ON t.id=o.car_type_id JOIN branch br ON br.id=b.pickup_branch_id WHERE ($1::text IS NULL OR b.status=$1) ORDER BY b.created_at`,
-      [status ?? null],
-    );
+    const builder = this.db
+      .createQueryBuilder()
+      .select([
+        'b.id AS id',
+        'b.booking_number AS "bookingNumber"',
+        'b.status AS status',
+        'b.pickup_at AS "pickupAt"',
+        'b.return_at AS "returnAt"',
+        'b.actual_return_at AS "actualReturnAt"',
+        'b.total_amount::text AS "totalAmount"',
+        'b.currency_code AS "currencyCode"',
+        'u.name AS "customerName"',
+        'u.email AS "customerEmail"',
+        't.brand AS brand',
+        't.model AS model',
+        'br.name AS "branchName"',
+      ])
+      .from('booking', 'b')
+      .innerJoin('app_user', 'u', 'u.id = b.user_id')
+      .innerJoin('car_type_branch', 'o', 'o.id = b.car_type_branch_id')
+      .innerJoin('car_type', 't', 't.id = o.car_type_id')
+      .innerJoin('branch', 'br', 'br.id = b.pickup_branch_id')
+      .orderBy('b.created_at');
+    if (status !== undefined) builder.where('b.status = :status', { status });
+    const bookings = await builder.getRawMany<Record<string, any>>();
+    if (!bookings.length) return bookings;
+    const charges = await this.db
+      .createQueryBuilder()
+      .select([
+        'a.booking_id AS "bookingId"',
+        'a.id AS id',
+        'a.type AS type',
+        'a.description AS description',
+        'a.amount::text AS amount',
+        'a.status AS status',
+        'a.created_at AS "createdAt"',
+      ])
+      .from('additional_charge', 'a')
+      .where('a.booking_id IN (:...bookingIds)', {
+        bookingIds: bookings.map(({ id }) => id),
+      })
+      .orderBy('a.created_at')
+      .getRawMany<Record<string, any>>();
+    const byBooking = new Map<string, Record<string, unknown>[]>();
+    for (const { bookingId, createdAt: _createdAt, ...charge } of charges) {
+      void _createdAt;
+      const list = byBooking.get(bookingId) ?? [];
+      list.push(charge);
+      byBooking.set(bookingId, list);
+    }
+    return bookings.map((booking) => {
+      const bookingCharges = byBooking.get(booking.id) ?? [];
+      const confirmed = charges
+        .filter(
+          (charge) =>
+            charge.bookingId === booking.id && charge.status === 'CONFIRMED',
+        )
+        .reduce((sum, charge) => addDecimals(sum, charge.amount), '0');
+      return {
+        ...booking,
+        finalAmount: addDecimals(booking.totalAmount, confirmed),
+        charges: bookingCharges,
+      };
+    });
   }
 
   async approve(id: string, actor: AuthUser) {
     return this.db.transaction(async (manager) => {
-      const row = (
-        await manager.query<Record<string, any>[]>(
-          `SELECT * FROM booking WHERE id=$1 FOR UPDATE`,
-          [id],
-        )
-      )[0];
+      const row = await manager
+        .createQueryBuilder()
+        .select('b.*')
+        .from('booking', 'b')
+        .where('b.id = :id', { id })
+        .setLock('pessimistic_write')
+        .getRawOne<Record<string, any>>();
       if (!row) throw new NotFoundException('Booking not found');
       if (row.status !== 'PENDING')
         throw new ConflictException('Only pending bookings can be approved');
-      await manager.query(
-        `SELECT id FROM car_type_branch WHERE id=$1 FOR UPDATE`,
-        [row.car_type_branch_id],
-      );
-      const cars = (
-        await manager.query<Record<string, number>[]>(
-          `SELECT count(*)::int AS count FROM car WHERE car_type_branch_id=$1 AND status='ACTIVE' AND is_active`,
-          [row.car_type_branch_id],
+      await manager
+        .createQueryBuilder()
+        .select('o.id')
+        .from('car_type_branch', 'o')
+        .where('o.id = :id', { id: row.car_type_branch_id })
+        .setLock('pessimistic_write')
+        .getRawOne();
+      const carCount = await manager
+        .createQueryBuilder()
+        .select('count(*)::int', 'count')
+        .from('car', 'c')
+        .where(
+          "c.car_type_branch_id = :id AND c.status = 'ACTIVE' AND c.is_active",
+          {
+            id: row.car_type_branch_id,
+          },
         )
-      )[0].count;
+        .getRawOne<{ count: number }>();
+      const cars = carCount.count;
       const interval = {
         startsAt: new Date(String(row.pickup_at)).toISOString(),
         endsAt: calculateReadyAt({
@@ -476,19 +758,43 @@ export class BookingsService {
         throw new ConflictException(
           'Vehicle capacity is unavailable; reject this request with a reason',
         );
-      const options = await manager.query<Record<string, any>[]>(
-        `SELECT bo.car_option_id AS id,bo.quantity,co.quantity_stock AS stock FROM booking_option bo JOIN car_option co ON co.id=bo.car_option_id WHERE bo.booking_id=$1 AND co.quantity_stock IS NOT NULL ORDER BY bo.car_option_id`,
-        [id],
-      );
+      const options = await manager
+        .createQueryBuilder()
+        .select([
+          'bo.car_option_id AS id',
+          'bo.quantity AS quantity',
+          'co.quantity_stock AS stock',
+        ])
+        .from('booking_option', 'bo')
+        .innerJoin('car_option', 'co', 'co.id = bo.car_option_id')
+        .where('bo.booking_id = :id AND co.quantity_stock IS NOT NULL', { id })
+        .orderBy('bo.car_option_id')
+        .getRawMany<Record<string, any>>();
       for (const option of options) {
-        await manager.query(
-          `SELECT id FROM car_option WHERE id=$1 FOR UPDATE`,
-          [option.id],
-        );
-        const reservations = await manager.query<Record<string, any>[]>(
-          `SELECT bo.quantity,b.pickup_at AS "pickupAt",COALESCE(b.actual_return_at,b.return_at) AS "returnAt" FROM booking_option bo JOIN booking b ON b.id=bo.booking_id WHERE bo.car_option_id=$1 AND b.status IN ('APPROVED','IN_USE') AND b.id<>$2`,
-          [option.id, id],
-        );
+        await manager
+          .createQueryBuilder()
+          .select('co.id')
+          .from('car_option', 'co')
+          .where('co.id = :optionId', { optionId: option.id })
+          .setLock('pessimistic_write')
+          .getRawOne();
+        const reservations = await manager
+          .createQueryBuilder()
+          .select([
+            'bo.quantity AS quantity',
+            'b.pickup_at AS "pickupAt"',
+            'COALESCE(b.actual_return_at, b.return_at) AS "returnAt"',
+          ])
+          .from('booking_option', 'bo')
+          .innerJoin('booking', 'b', 'b.id = bo.booking_id')
+          .where(
+            "bo.car_option_id = :optionId AND b.status IN ('APPROVED','IN_USE') AND b.id <> :id",
+            {
+              optionId: option.id,
+              id,
+            },
+          )
+          .getRawMany<Record<string, any>>();
         const available = calculateAvailableQuantity({
           requestedInterval: interval,
           capacity: option.stock,
@@ -503,10 +809,17 @@ export class BookingsService {
             `Option ${option.id} has insufficient stock`,
           );
       }
-      await manager.query(
-        `UPDATE booking SET status='APPROVED',approved_by=$2,approved_at=now(),updated_at=now() WHERE id=$1`,
-        [id, actor.id],
-      );
+      await manager
+        .createQueryBuilder()
+        .update('booking')
+        .set({
+          status: 'APPROVED',
+          approved_by: actor.id,
+          approved_at: () => 'now()',
+          updated_at: () => 'now()',
+        })
+        .where('id = :id', { id })
+        .execute();
       return { id, status: 'APPROVED' };
     });
   }
@@ -514,39 +827,58 @@ export class BookingsService {
   async reject(id: string, reason: string) {
     if (!reason.trim())
       throw new BadRequestException('A rejection reason is required');
-    const rows = await this.db.query<Record<string, string>[]>(
-      `UPDATE booking SET status='REJECTED',rejection_reason=$2,updated_at=now() WHERE id=$1 AND status='PENDING' RETURNING id`,
-      [id, reason.trim()],
-    );
-    if (!rows[0])
+    const result = await this.db
+      .createQueryBuilder()
+      .update('booking')
+      .set({
+        status: 'REJECTED',
+        rejection_reason: reason.trim(),
+        updated_at: () => 'now()',
+      })
+      .where("id = :id AND status = 'PENDING'", { id })
+      .returning('id')
+      .execute();
+    if (!result.raw[0])
       throw new ConflictException('Only pending bookings can be rejected');
     return { id, status: 'REJECTED' };
   }
 
   async pickup(id: string, carId: string) {
     return this.db.transaction(async (manager) => {
-      const booking = (
-        await manager.query<Record<string, any>[]>(
-          `SELECT * FROM booking WHERE id=$1 FOR UPDATE`,
-          [id],
-        )
-      )[0];
+      const booking = await manager
+        .createQueryBuilder()
+        .select('b.*')
+        .from('booking', 'b')
+        .where('b.id = :id', { id })
+        .setLock('pessimistic_write')
+        .getRawOne<Record<string, any>>();
       if (!booking) throw new NotFoundException('Booking not found');
-      const car = (
-        await manager.query<Record<string, any>[]>(
-          `SELECT c.id,c.car_type_branch_id AS "carTypeBranchId",c.status,c.is_active FROM car c WHERE id=$1 FOR UPDATE`,
-          [carId],
-        )
-      )[0];
+      const car = await manager
+        .createQueryBuilder()
+        .select([
+          'c.id AS id',
+          'c.car_type_branch_id AS "carTypeBranchId"',
+          'c.status AS status',
+          'c.is_active AS is_active',
+        ])
+        .from('car', 'c')
+        .where('c.id = :carId', { carId })
+        .setLock('pessimistic_write')
+        .getRawOne<Record<string, any>>();
       if (!car) throw new NotFoundException('Car not found');
       const current = new Date();
-      const active =
-        (
-          await manager.query(
-            `SELECT id FROM booking WHERE car_id=$1 AND status='IN_USE' AND actual_return_at IS NULL AND id<>$2`,
-            [carId, id],
-          )
-        ).length > 0;
+      const active = await manager
+        .createQueryBuilder()
+        .select('b.id')
+        .from('booking', 'b')
+        .where(
+          "b.car_id = :carId AND b.status = 'IN_USE' AND b.actual_return_at IS NULL AND b.id <> :id",
+          {
+            carId,
+            id,
+          },
+        )
+        .getExists();
       const decision = canAssignCar({
         booking: {
           status: booking.status,
@@ -562,65 +894,110 @@ export class BookingsService {
         now: current.toISOString(),
       });
       if (!decision.allowed) throw new ConflictException(decision.reason);
-      await manager.query(
-        `UPDATE booking SET status='IN_USE',car_id=$2,updated_at=now() WHERE id=$1`,
-        [id, carId],
-      );
+      await manager
+        .createQueryBuilder()
+        .update('booking')
+        .set({ status: 'IN_USE', car_id: carId, updated_at: () => 'now()' })
+        .where('id = :id', { id })
+        .execute();
       return { id, status: 'IN_USE', carId };
     });
   }
 
   async pickupCars(id: string) {
-    const booking = (
-      await this.db.query<Record<string, string>[]>(
-        `SELECT car_type_branch_id AS "carTypeBranchId" FROM booking WHERE id=$1 AND status='APPROVED'`,
-        [id],
-      )
-    )[0];
+    const booking = await this.db
+      .createQueryBuilder()
+      .select('b.car_type_branch_id', 'carTypeBranchId')
+      .from('booking', 'b')
+      .where("b.id = :id AND b.status = 'APPROVED'", { id })
+      .getRawOne<{ carTypeBranchId: string }>();
     if (!booking)
       throw new ConflictException('Booking is not ready for pickup');
-    return this.db.query<Record<string, unknown>[]>(
-      `SELECT c.id,c.license_plate AS "licensePlate",c.status,
-        EXISTS(SELECT 1 FROM booking active WHERE active.car_id=c.id AND active.status='IN_USE' AND active.actual_return_at IS NULL) AS "isOutOnRent",
-        COALESCE((SELECT CASE WHEN previous.actual_return_at IS NULL THEN previous.return_at+interval '2 hours' ELSE previous.actual_return_at+interval '1 hour' END FROM booking previous WHERE previous.car_id=c.id AND previous.status IN ('IN_USE','COMPLETED') ORDER BY COALESCE(previous.actual_return_at,previous.return_at) DESC LIMIT 1),'-infinity'::timestamptz) AS "readyAt"
-       FROM car c WHERE c.car_type_branch_id=$1 AND c.is_active ORDER BY c.license_plate`,
-      [booking.carTypeBranchId],
-    );
+    return this.db
+      .createQueryBuilder()
+      .select([
+        'c.id AS id',
+        'c.license_plate AS "licensePlate"',
+        'c.status AS status',
+        `EXISTS(SELECT 1 FROM booking active WHERE active.car_id = c.id AND active.status = 'IN_USE' AND active.actual_return_at IS NULL) AS "isOutOnRent"`,
+        `COALESCE((SELECT CASE WHEN previous.actual_return_at IS NULL THEN previous.return_at + interval '2 hours' ELSE previous.actual_return_at + interval '1 hour' END FROM booking previous WHERE previous.car_id = c.id AND previous.status IN ('IN_USE','COMPLETED') ORDER BY COALESCE(previous.actual_return_at, previous.return_at) DESC LIMIT 1), '-infinity'::timestamptz) AS "readyAt"`,
+      ])
+      .from('car', 'c')
+      .where('c.car_type_branch_id = :carTypeBranchId AND c.is_active', {
+        carTypeBranchId: booking.carTypeBranchId,
+      })
+      .orderBy('c.license_plate')
+      .getRawMany();
   }
 
   private async carReadyAt(manager: EntityManager, carId: string) {
-    const rows = await manager.query<Record<string, any>[]>(
-      `SELECT return_at AS "returnAt",actual_return_at AS "actualReturnAt" FROM booking WHERE car_id=$1 AND status IN ('IN_USE','COMPLETED') ORDER BY COALESCE(actual_return_at,return_at) DESC LIMIT 1`,
-      [carId],
-    );
-    return rows[0]
+    const row = await manager
+      .createQueryBuilder()
+      .select([
+        'b.return_at AS "returnAt"',
+        'b.actual_return_at AS "actualReturnAt"',
+      ])
+      .from('booking', 'b')
+      .where("b.car_id = :carId AND b.status IN ('IN_USE','COMPLETED')", {
+        carId,
+      })
+      .orderBy('COALESCE(b.actual_return_at, b.return_at)', 'DESC')
+      .limit(1)
+      .getRawOne<Record<string, any>>();
+    return row
       ? calculateReadyAt({
-          returnAt: new Date(String(rows[0].returnAt)).toISOString(),
-          actualReturnAt: rows[0].actualReturnAt
-            ? new Date(String(rows[0].actualReturnAt)).toISOString()
+          returnAt: new Date(String(row.returnAt)).toISOString(),
+          actualReturnAt: row.actualReturnAt
+            ? new Date(String(row.actualReturnAt)).toISOString()
             : null,
         }).readyAt
       : '1970-01-01T00:00:00Z';
   }
 
   async returnPreview(id: string) {
-    const row = (
-      await this.db.query<Record<string, any>[]>(
-        `SELECT b.*,b.car_type_branch_id AS "carTypeBranchId",b.pickup_at AS "pickupAt",b.return_at AS "returnAt",b.daily_rate_at_booking::text AS daily,b.hourly_rate_at_booking::text AS hourly,b.rental_subtotal::text AS rental,b.currency_code AS currency,br.timezone FROM booking b JOIN car_type_branch o ON o.id=b.car_type_branch_id JOIN branch br ON br.id=o.branch_id WHERE b.id=$1`,
-        [id],
-      )
-    )[0];
+    const row = await this.db
+      .createQueryBuilder()
+      .select([
+        'b.*',
+        'b.car_type_branch_id AS "carTypeBranchId"',
+        'b.pickup_at AS "pickupAt"',
+        'b.return_at AS "returnAt"',
+        'b.daily_rate_at_booking::text AS daily',
+        'b.hourly_rate_at_booking::text AS hourly',
+        'b.rental_subtotal::text AS rental',
+        'b.currency_code AS currency',
+        'br.timezone AS timezone',
+      ])
+      .from('booking', 'b')
+      .innerJoin('car_type_branch', 'o', 'o.id = b.car_type_branch_id')
+      .innerJoin('branch', 'br', 'br.id = o.branch_id')
+      .where('b.id = :id', { id })
+      .getRawOne<Record<string, any>>();
     if (!row) throw new NotFoundException('Booking not found');
     if (row.status !== 'IN_USE')
       throw new ConflictException('Only in-use bookings can be returned');
-    const options = await this.db.query<Record<string, any>[]>(
-      `SELECT bo.id,bo.car_option_id AS "carOptionId",co.pricing_type AS "pricingType",bo.quantity,bo.unit_price_at_booking::text AS "unitPrice",bo.charged_units AS "chargedUnits",bo.total_amount::text AS "totalAmount" FROM booking_option bo JOIN car_option co ON co.id=bo.car_option_id WHERE bo.booking_id=$1`,
-      [id],
-    );
+    if (row.actual_return_at)
+      throw new ConflictException('Return has already been recorded');
+    const options = await this.db
+      .createQueryBuilder()
+      .select([
+        'bo.id AS id',
+        'bo.car_option_id AS "carOptionId"',
+        'co.pricing_type AS "pricingType"',
+        'bo.quantity AS quantity',
+        'bo.unit_price_at_booking::text AS "unitPrice"',
+        'bo.charged_units AS "chargedUnits"',
+        'bo.total_amount::text AS "totalAmount"',
+      ])
+      .from('booking_option', 'bo')
+      .innerJoin('car_option', 'co', 'co.id = bo.car_option_id')
+      .where('bo.booking_id = :id', { id })
+      .getRawMany<Record<string, any>>();
+    const actualReturnAt = new Date().toISOString();
     const lines = calculateLateReturnCharges({
       pickupAt: new Date(String(row.pickupAt)).toISOString(),
       returnAt: new Date(String(row.returnAt)).toISOString(),
-      actualReturnAt: new Date().toISOString(),
+      actualReturnAt,
       branchTimeZone: row.timezone,
       hourlyRate: { amount: row.hourly, currency: row.currency },
       dailyRate: { amount: row.daily, currency: row.currency },
@@ -634,29 +1011,57 @@ export class BookingsService {
         totalAmount: { amount: o.totalAmount, currency: row.currency },
       })),
     });
-    return { actualReturnAt: new Date().toISOString(), lines };
+    const bookingAmount = String(row.total_amount);
+    const currentFinalAmount = await this.finalAmount(this.db.manager, id);
+    return {
+      actualReturnAt,
+      bookingAmount,
+      projectedFinalAmount: lines.reduce(
+        (amount, line) => addDecimals(amount, line.amount.amount),
+        currentFinalAmount,
+      ),
+      lines,
+    };
   }
 
   async completeReturn(id: string, actor: AuthUser, charges: AddChargeInput[]) {
     return this.db.transaction(async (manager) => {
-      const b = (
-        await manager.query<Record<string, any>[]>(
-          `SELECT * FROM booking WHERE id=$1 FOR UPDATE`,
-          [id],
-        )
-      )[0];
+      const b = await manager
+        .createQueryBuilder()
+        .select('b.*')
+        .from('booking', 'b')
+        .where('b.id = :id', { id })
+        .setLock('pessimistic_write')
+        .getRawOne<Record<string, any>>();
       if (!b) throw new NotFoundException('Booking not found');
       if (b.status !== 'IN_USE')
         throw new ConflictException('Only in-use bookings can be returned');
-      await manager.query(
-        `SELECT id FROM car_type_branch WHERE id=$1 FOR UPDATE`,
-        [b.car_type_branch_id],
-      );
+      await manager
+        .createQueryBuilder()
+        .select('o.id')
+        .from('car_type_branch', 'o')
+        .where('o.id = :id', { id: b.car_type_branch_id })
+        .setLock('pessimistic_write')
+        .getRawOne();
       if (b.actual_return_at) {
-        const existing = await manager.query<Record<string, unknown>[]>(
-          `SELECT id,type,description,quantity,unit_price::text AS "unitPrice",amount::text,status FROM additional_charge WHERE booking_id=$1 AND type IN ('EXTRA_RENTAL','EXTRA_OPTION') ORDER BY created_at`,
-          [id],
-        );
+        const existing = await manager
+          .createQueryBuilder()
+          .select([
+            'a.id AS id',
+            'a.type AS type',
+            'a.description AS description',
+            'a.quantity AS quantity',
+            'a.unit_price::text AS "unitPrice"',
+            'a.amount::text AS amount',
+            'a.status AS status',
+          ])
+          .from('additional_charge', 'a')
+          .where(
+            "a.booking_id = :id AND a.type IN ('EXTRA_RENTAL','EXTRA_OPTION')",
+            { id },
+          )
+          .orderBy('a.created_at')
+          .getRawMany();
         return {
           id,
           status: 'IN_USE',
@@ -670,22 +1075,28 @@ export class BookingsService {
       }
       const preview = await this.returnPreview(id);
       for (const line of preview.lines)
-        await manager.query(
-          `INSERT INTO additional_charge(id,booking_id,booking_option_id,type,description,quantity,unit_price,amount,status,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'CONFIRMED',$9) ON CONFLICT DO NOTHING`,
-          [
-            randomUUID(),
-            id,
-            line.kind === 'EXTRA_OPTION' ? line.bookingOptionId : null,
-            line.kind,
-            line.kind === 'EXTRA_RENTAL'
-              ? 'Additional rental time'
-              : 'Additional option rental',
-            line.quantity,
-            line.unitPrice.amount,
-            line.amount.amount,
-            actor.id,
-          ],
-        );
+        await manager
+          .createQueryBuilder()
+          .insert()
+          .into('additional_charge')
+          .values({
+            id: randomUUID(),
+            booking_id: id,
+            booking_option_id:
+              line.kind === 'EXTRA_OPTION' ? line.bookingOptionId : null,
+            type: line.kind,
+            description:
+              line.kind === 'EXTRA_RENTAL'
+                ? 'Additional rental time'
+                : 'Additional option rental',
+            quantity: line.quantity,
+            unit_price: line.unitPrice.amount,
+            amount: line.amount.amount,
+            status: 'CONFIRMED',
+            created_by: actor.id,
+          })
+          .orIgnore()
+          .execute();
       for (const charge of charges) {
         if (!['FUEL', 'DAMAGE', 'OTHER'].includes(charge.type))
           throw new BadRequestException('Unsupported additional charge type');
@@ -693,22 +1104,32 @@ export class BookingsService {
           throw new BadRequestException(
             'Charge amount must be a non-negative decimal with at most four places',
           );
-        await manager.query(
-          `INSERT INTO additional_charge(id,booking_id,type,description,quantity,unit_price,amount,status,created_by) VALUES($1,$2,$3,$4,1,$5,$5,'PENDING',$6)`,
-          [
-            randomUUID(),
-            id,
-            charge.type,
-            charge.description.trim(),
-            charge.amount,
-            actor.id,
-          ],
-        );
+        await manager
+          .createQueryBuilder()
+          .insert()
+          .into('additional_charge')
+          .values({
+            id: randomUUID(),
+            booking_id: id,
+            type: charge.type,
+            description: charge.description.trim(),
+            quantity: 1,
+            unit_price: charge.amount,
+            amount: charge.amount,
+            status: 'PENDING',
+            created_by: actor.id,
+          })
+          .execute();
       }
-      await manager.query(
-        `UPDATE booking SET actual_return_at=$2,updated_at=now() WHERE id=$1`,
-        [id, preview.actualReturnAt],
-      );
+      await manager
+        .createQueryBuilder()
+        .update('booking')
+        .set({
+          actual_return_at: preview.actualReturnAt,
+          updated_at: () => 'now()',
+        })
+        .where('id = :id', { id })
+        .execute();
       return {
         id,
         status: 'IN_USE',
@@ -723,29 +1144,42 @@ export class BookingsService {
 
   async confirmReturn(id: string) {
     return this.db.transaction(async (manager) => {
-      const b = (
-        await manager.query<Record<string, any>[]>(
-          `SELECT id,status FROM booking WHERE id=$1 FOR UPDATE`,
-          [id],
-        )
-      )[0];
+      const b = await manager
+        .createQueryBuilder()
+        .select([
+          'b.id AS id',
+          'b.status AS status',
+          'b.actual_return_at AS actual_return_at',
+        ])
+        .from('booking', 'b')
+        .where('b.id = :id', { id })
+        .setLock('pessimistic_write')
+        .getRawOne<Record<string, any>>();
       if (!b) throw new NotFoundException('Booking not found');
       if (b.status !== 'IN_USE')
         throw new ConflictException(
           'Booking is not awaiting return confirmation',
         );
-      const pending = await manager.query(
-        `SELECT id FROM additional_charge WHERE booking_id=$1 AND status='PENDING' LIMIT 1`,
-        [id],
-      );
-      if (pending.length)
+      if (!b.actual_return_at)
+        throw new ConflictException(
+          'Record the actual return before completing the booking',
+        );
+      const pending = await manager
+        .createQueryBuilder()
+        .select('a.id')
+        .from('additional_charge', 'a')
+        .where("a.booking_id = :id AND a.status = 'PENDING'", { id })
+        .getExists();
+      if (pending)
         throw new ConflictException(
           'Confirm or waive pending charges before completing the booking',
         );
-      await manager.query(
-        `UPDATE booking SET status='COMPLETED',updated_at=now() WHERE id=$1`,
-        [id],
-      );
+      await manager
+        .createQueryBuilder()
+        .update('booking')
+        .set({ status: 'COMPLETED', updated_at: () => 'now()' })
+        .where('id = :id', { id })
+        .execute();
       return {
         id,
         status: 'COMPLETED',
@@ -755,11 +1189,18 @@ export class BookingsService {
   }
 
   private async finalAmount(manager: EntityManager, id: string) {
-    const rows = await manager.query<Record<string, string>[]>(
-      `SELECT b.total_amount::text AS total,COALESCE(sum(a.amount) FILTER(WHERE a.status='CONFIRMED'),0)::text AS extra FROM booking b LEFT JOIN additional_charge a ON a.booking_id=b.id WHERE b.id=$1 GROUP BY b.id`,
-      [id],
-    );
-    return addDecimals(rows[0].total, rows[0].extra);
+    const row = await manager
+      .createQueryBuilder()
+      .select([
+        'b.total_amount::text AS total',
+        "COALESCE(sum(a.amount) FILTER (WHERE a.status = 'CONFIRMED'), 0)::text AS extra",
+      ])
+      .from('booking', 'b')
+      .leftJoin('additional_charge', 'a', 'a.booking_id = b.id')
+      .where('b.id = :id', { id })
+      .groupBy('b.id')
+      .getRawOne<{ total: string; extra: string }>();
+    return addDecimals(row.total, row.extra);
   }
 
   async addCharge(id: string, actor: AuthUser, input: AddChargeInput) {
@@ -771,22 +1212,37 @@ export class BookingsService {
       );
     if (!input.description.trim())
       throw new BadRequestException('A charge description is required');
-    const rows = await this.db.query<Record<string, string>[]>(
-      `INSERT INTO additional_charge(id,booking_id,type,description,quantity,unit_price,amount,status,created_by) SELECT $1,id,$3,$4,1,$5,$5,'PENDING',$6 FROM booking WHERE id=$2 AND status='IN_USE' RETURNING id`,
-      [
-        randomUUID(),
-        id,
-        input.type,
-        input.description.trim(),
-        input.amount,
-        actor.id,
-      ],
-    );
-    if (!rows[0])
-      throw new ConflictException(
-        'Additional charges can only be added to an in-use booking',
-      );
-    return { id: rows[0].id, status: 'PENDING' };
+    return this.db.transaction(async (manager) => {
+      const booking = await manager
+        .createQueryBuilder()
+        .select('b.id')
+        .from('booking', 'b')
+        .where("b.id = :id AND b.status = 'IN_USE'", { id })
+        .setLock('pessimistic_write')
+        .getRawOne();
+      if (!booking)
+        throw new ConflictException(
+          'Additional charges can only be added to an in-use booking',
+        );
+      const chargeId = randomUUID();
+      await manager
+        .createQueryBuilder()
+        .insert()
+        .into('additional_charge')
+        .values({
+          id: chargeId,
+          booking_id: id,
+          type: input.type,
+          description: input.description.trim(),
+          quantity: 1,
+          unit_price: input.amount,
+          amount: input.amount,
+          status: 'PENDING',
+          created_by: actor.id,
+        })
+        .execute();
+      return { id: chargeId, status: 'PENDING' };
+    });
   }
 
   async chargeStatus(id: string, chargeId: string, status: string) {
@@ -794,12 +1250,18 @@ export class BookingsService {
       throw new BadRequestException(
         'Charge status must be CONFIRMED or WAIVED',
       );
-    const rows = await this.db.query<Record<string, string>[]>(
-      `UPDATE additional_charge SET status=$3 WHERE id=$2 AND booking_id=$1 AND status='PENDING' RETURNING id`,
-      [id, chargeId, status],
-    );
-    if (!rows[0]) throw new NotFoundException('Pending charge not found');
-    return { id: rows[0].id, status };
+    const result = await this.db
+      .createQueryBuilder()
+      .update('additional_charge')
+      .set({ status })
+      .where("booking_id = :id AND id = :chargeId AND status = 'PENDING'", {
+        id,
+        chargeId,
+      })
+      .returning('id')
+      .execute();
+    if (!result.raw[0]) throw new NotFoundException('Pending charge not found');
+    return { id: result.raw[0].id, status };
   }
 
   async reports(input: ReportFilterInput) {
@@ -807,11 +1269,50 @@ export class BookingsService {
       to = instant(input.createdTo);
     if (Date.parse(to) <= Date.parse(from))
       throw new BadRequestException('Report end must be after start');
-    const rows = await this.db.query<Record<string, any>[]>(
-      `SELECT b.id,b.pickup_branch_id AS "branchId",o.car_type_id AS "carTypeId",b.created_at AS "createdAt",b.status,b.currency_code AS currency,b.total_amount::text AS total,COALESCE((SELECT json_agg(a.amount::text) FROM additional_charge a WHERE a.booking_id=b.id AND a.status='CONFIRMED'),'[]') AS charges
-      FROM booking b JOIN car_type_branch o ON o.id=b.car_type_branch_id JOIN branch br ON br.id=b.pickup_branch_id JOIN country c ON c.id=br.country_id WHERE b.created_at >= $1 AND b.created_at < $2 AND ($3::uuid IS NULL OR b.pickup_branch_id=$3) AND ($4::text IS NULL OR upper(c.code)=upper($4))`,
-      [from, to, input.branchId ?? null, input.countryCode ?? null],
-    );
+    const builder = this.db
+      .createQueryBuilder()
+      .select([
+        'b.id AS id',
+        'b.pickup_branch_id AS "branchId"',
+        'o.car_type_id AS "carTypeId"',
+        'b.created_at AS "createdAt"',
+        'b.status AS status',
+        'b.currency_code AS currency',
+        'b.total_amount::text AS total',
+      ])
+      .from('booking', 'b')
+      .innerJoin('car_type_branch', 'o', 'o.id = b.car_type_branch_id')
+      .innerJoin('branch', 'br', 'br.id = b.pickup_branch_id')
+      .innerJoin('country', 'c', 'c.id = br.country_id')
+      .where('b.created_at >= :from AND b.created_at < :to', { from, to });
+    if (input.branchId)
+      builder.andWhere('b.pickup_branch_id = :branchId', {
+        branchId: input.branchId,
+      });
+    if (input.countryCode)
+      builder.andWhere('upper(c.code) = upper(:countryCode)', {
+        countryCode: input.countryCode,
+      });
+    const rows = await builder.getRawMany<Record<string, any>>();
+    const charges = rows.length
+      ? await this.db
+          .createQueryBuilder()
+          .select(['a.booking_id AS "bookingId"', 'a.amount::text AS amount'])
+          .from('additional_charge', 'a')
+          .where(
+            "a.status = 'CONFIRMED' AND a.booking_id IN (:...bookingIds)",
+            {
+              bookingIds: rows.map(({ id }) => id),
+            },
+          )
+          .getRawMany<{ bookingId: string; amount: string }>()
+      : [];
+    const chargesByBooking = new Map<string, string[]>();
+    for (const charge of charges) {
+      const list = chargesByBooking.get(charge.bookingId) ?? [];
+      list.push(charge.amount);
+      chargesByBooking.set(charge.bookingId, list);
+    }
     return summarizeBookings({
       createdFrom: from,
       createdTo: to,
@@ -821,42 +1322,75 @@ export class BookingsService {
         createdAt: new Date(String(b.createdAt)).toISOString(),
         status: b.status,
         totalAmount: { amount: b.total, currency: b.currency },
-        confirmedAdditionalCharges: (b.charges as string[]).map((amount) => ({
-          amount,
-          currency: b.currency,
-        })),
+        confirmedAdditionalCharges: (chargesByBooking.get(b.id) ?? []).map(
+          (amount) => ({
+            amount,
+            currency: b.currency,
+          }),
+        ),
       })),
     });
   }
 
   async members(query?: string) {
-    return this.db.query<Record<string, unknown>[]>(
-      `SELECT u.id,u.name,u.email,u.phone,u.is_suspended AS "isSuspended",count(b.id)::int AS "bookingCount" FROM app_user u LEFT JOIN booking b ON b.user_id=u.id WHERE u.role='CUSTOMER' AND ($1::text IS NULL OR u.name ILIKE '%'||$1||'%' OR u.email ILIKE '%'||$1||'%') GROUP BY u.id ORDER BY u.name`,
-      [query?.trim() || null],
-    );
+    const builder = this.db
+      .createQueryBuilder()
+      .select([
+        'u.id AS id',
+        'u.name AS name',
+        'u.email AS email',
+        'u.phone AS phone',
+        'u.is_suspended AS "isSuspended"',
+        'count(b.id)::int AS "bookingCount"',
+      ])
+      .from('app_user', 'u')
+      .leftJoin('booking', 'b', 'b.user_id = u.id')
+      .where("u.role = 'CUSTOMER'")
+      .groupBy('u.id')
+      .orderBy('u.name');
+    const search = query?.trim();
+    if (search)
+      builder.andWhere('(u.name ILIKE :search OR u.email ILIKE :search)', {
+        search: `%${search}%`,
+      });
+    return builder.getRawMany();
   }
 
   async member(id: string) {
-    const rows = await this.db.query<Record<string, any>[]>(
-      `SELECT id,name,email,phone,is_suspended AS "isSuspended",created_at AS "createdAt" FROM app_user WHERE id=$1 AND role='CUSTOMER'`,
-      [id],
-    );
-    if (!rows[0]) throw new NotFoundException('Customer not found');
-    return { ...rows[0], bookings: await this.mine(id) };
+    const customer = await this.db
+      .createQueryBuilder()
+      .select([
+        'u.id AS id',
+        'u.name AS name',
+        'u.email AS email',
+        'u.phone AS phone',
+        'u.is_suspended AS "isSuspended"',
+        'u.created_at AS "createdAt"',
+      ])
+      .from('app_user', 'u')
+      .where("u.id = :id AND u.role = 'CUSTOMER'", { id })
+      .getRawOne<Record<string, any>>();
+    if (!customer) throw new NotFoundException('Customer not found');
+    return { ...customer, bookings: await this.mine(id) };
   }
 
   async suspend(id: string, suspended: boolean) {
     return this.db.transaction(async (manager) => {
-      const rows = await manager.query<Record<string, string>[]>(
-        `UPDATE app_user SET is_suspended=$2,updated_at=now() WHERE id=$1 AND role='CUSTOMER' RETURNING id`,
-        [id, suspended],
-      );
-      if (!rows[0]) throw new NotFoundException('Customer not found');
+      const result = await manager
+        .createQueryBuilder()
+        .update('app_user')
+        .set({ is_suspended: suspended, updated_at: () => 'now()' })
+        .where("id = :id AND role = 'CUSTOMER'", { id })
+        .returning('id')
+        .execute();
+      if (!result.raw[0]) throw new NotFoundException('Customer not found');
       if (suspended)
-        await manager.query(
-          `UPDATE user_session SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL`,
-          [id],
-        );
+        await manager
+          .createQueryBuilder()
+          .update('user_session')
+          .set({ revoked_at: () => 'now()' })
+          .where('user_id = :id AND revoked_at IS NULL', { id })
+          .execute();
       return { id, isSuspended: suspended };
     });
   }

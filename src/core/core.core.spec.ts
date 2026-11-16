@@ -605,7 +605,11 @@ describe('calculateAvailableQuantity (BL-06)', () => {
           capacity,
           reservedIntervals,
         }),
-      ).toEqual({ availableQuantity, shortfallQuantity });
+      ).toEqual({
+        availableQuantity,
+        shortfallQuantity,
+        peakReserved: capacity - availableQuantity + shortfallQuantity,
+      });
     },
   );
 
@@ -622,7 +626,11 @@ describe('calculateAvailableQuantity (BL-06)', () => {
           },
         ],
       }),
-    ).toEqual({ availableQuantity: 1, shortfallQuantity: 0 });
+    ).toEqual({
+      availableQuantity: 1,
+      shortfallQuantity: 0,
+      peakReserved: 1,
+    });
   });
 
   it('does not mutate or require sorted reservation input', () => {
@@ -634,7 +642,11 @@ describe('calculateAvailableQuantity (BL-06)', () => {
         capacity: 3,
         reservedIntervals,
       }),
-    ).toEqual({ availableQuantity: 1, shortfallQuantity: 0 });
+    ).toEqual({
+      availableQuantity: 1,
+      shortfallQuantity: 0,
+      peakReserved: 2,
+    });
     expect(reservedIntervals).toEqual(original);
   });
 });

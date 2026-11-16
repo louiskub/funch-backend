@@ -24,6 +24,16 @@ export class IdParams {
   id!: string;
 }
 
+export class FleetTimelineQueryDto {
+  @IsUUID()
+  branchId!: string;
+
+  @ValidateIf((_, value: unknown) => value !== undefined)
+  @IsString()
+  @Matches(/^\d{4}-(0[1-9]|1[0-2])$/)
+  month?: string;
+}
+
 export class CarTypeDto {
   @IsString() @MinLength(1) @MaxLength(80) brand!: string;
   @IsString() @MinLength(1) @MaxLength(100) model!: string;

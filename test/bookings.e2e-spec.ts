@@ -1,6 +1,7 @@
 import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { randomUUID } from 'node:crypto';
+import { DateTime } from 'luxon';
 import { Pool } from 'pg';
 import request from 'supertest';
 import { App } from 'supertest/types';
@@ -9,9 +10,27 @@ import { createAppDataSource } from '../src/platform/database/typeorm-data-sourc
 import { seedMain } from '../src/platform/database/seedings/main.seeding';
 
 const origin = 'http://localhost:3000';
+const branchId = '20000000-0000-4000-8000-000000000001';
 const offerId = '40000000-0000-4000-8000-000000000001';
 const future = (days: number) =>
   new Date(Date.now() + days * 86_400_000).toISOString();
+
+function object(value: unknown): Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value))
+    throw new Error('Expected an object response');
+  return Object.fromEntries(Object.entries(value));
+}
+
+function objects(value: unknown): Record<string, unknown>[] {
+  if (!Array.isArray(value)) throw new Error('Expected an array response');
+  return value.map(object);
+}
+
+function integer(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value))
+    throw new Error('Expected an integer response');
+  return value;
+}
 
 describe('Booking API (isolated PostgreSQL)', () => {
   let app: INestApplication<App>;
@@ -220,11 +239,73 @@ describe('Booking API (isolated PostgreSQL)', () => {
     expect(retryResponse.body.data.status).toBe('PENDING');
   });
 
+  it('reports branch-local daily reserved and pending fleet peaks for the current or a future month', async () => {
+    const monthStart = DateTime.now()
+      .setZone('Asia/Bangkok')
+      .plus({ months: 1 })
+      .startOf('month');
+    const pickup = monthStart.plus({ days: 5, hours: 8 });
+    const booking = await createBooking(
+      [],
+      pickup.toUTC().toISO()!,
+      pickup.plus({ hours: 4 }).toUTC().toISO()!,
+    );
+    const month = monthStart.toFormat('yyyy-MM');
+
+    await request(app.getHttpServer())
+      .get(`/api/admin/fleet/timeline?branchId=${branchId}&month=${month}`)
+      .expect(401);
+    const response = await request(app.getHttpServer())
+      .get(`/api/admin/fleet/timeline?branchId=${branchId}&month=${month}`)
+      .set('Cookie', adminCookie)
+      .expect(200);
+    const data = object(response.body.data);
+    const offer = objects(data.matrix).find(
+      (item) => item.carTypeBranchId === offerId,
+    );
+    if (!offer)
+      throw new Error('Expected the booked offer in the fleet matrix');
+    const day = objects(offer.days).find(
+      (item) => item.date === pickup.toISODate(),
+    );
+    if (!day) throw new Error('Expected the pickup day in the fleet matrix');
+    expect(data).toMatchObject({
+      month,
+      branch: { id: branchId, timezone: 'Asia/Bangkok' },
+    });
+    expect(booking.id).toBeTruthy();
+    const peakPending = integer(day.peakPending);
+    const peakReserved = integer(day.peakReserved);
+    const totalCapacity = integer(day.totalCapacity);
+    expect(peakPending).toBeGreaterThanOrEqual(1);
+    expect(peakReserved).toBeGreaterThanOrEqual(peakPending);
+    expect(integer(day.available)).toBe(
+      Math.max(0, totalCapacity - peakReserved),
+    );
+
+    await request(app.getHttpServer())
+      .get(`/api/admin/fleet/timeline?branchId=${branchId}&month=2026-13`)
+      .set('Cookie', adminCookie)
+      .expect(400);
+    const pastMonth = DateTime.now()
+      .setZone('Asia/Bangkok')
+      .minus({ months: 1 })
+      .toFormat('yyyy-MM');
+    await request(app.getHttpServer())
+      .get(`/api/admin/fleet/timeline?branchId=${branchId}&month=${pastMonth}`)
+      .set('Cookie', adminCookie)
+      .expect(400);
+  });
+
   it('reserves option stock on pending checkout and releases it when rejected by admin', async () => {
     const optionId = randomUUID();
     await db.query(
       `INSERT INTO car_option(id,branch_id,code,name,description,category,pricing_type,price,quantity_stock) VALUES($1,'20000000-0000-4000-8000-000000000001',$2,'Booking seat','Shared test stock','EQUIPMENT','PER_UNIT_PER_DAY','10',1)`,
       [optionId, `BOOKING-${optionId.slice(0, 8)}`],
+    );
+    await db.query(
+      'UPDATE car_type_branch SET supported_option_ids = array_append(supported_option_ids, $1) WHERE id=$2',
+      [optionId, offerId],
     );
     const secondCar = randomUUID();
     await db.query(
@@ -277,6 +358,10 @@ describe('Booking API (isolated PostgreSQL)', () => {
       expect(retryResponse.status).toBe(201);
     } finally {
       await db.query('DELETE FROM car WHERE id=$1', [secondCar]);
+      await db.query(
+        'UPDATE car_type_branch SET supported_option_ids = array_remove(supported_option_ids, $1) WHERE id=$2',
+        [optionId, offerId],
+      );
       await db.query('DELETE FROM booking_option WHERE car_option_id=$1', [
         optionId,
       ]);

@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { Roles } from '../auth/decorators/auth.decorators';
@@ -15,6 +16,7 @@ import { UserRole } from '../auth/enums/user-role.enum';
 import {
   CarDto,
   CarTypeDto,
+  FleetTimelineQueryDto,
   IdParams,
   OfferDto,
   UpdateCarDto,
@@ -31,6 +33,9 @@ export class AdminFleetController {
 
   @Get('branches') branches() {
     return this.fleet.branches();
+  }
+  @Get('timeline') fleetTimeline(@Query() query: FleetTimelineQueryDto) {
+    return this.fleet.fleetTimeline(query);
   }
   @Get('car-types') carTypes() {
     return this.fleet.carTypes();

@@ -69,6 +69,7 @@ export interface CalculateAvailableQuantityInput {
 export interface CalculateAvailableQuantityResult {
   availableQuantity: number;
   shortfallQuantity: number;
+  peakReserved: number;
 }
 
 export function calculateAvailableQuantity(
@@ -117,6 +118,7 @@ export function calculateAvailableQuantity(
   return {
     availableQuantity: Math.max(0, input.capacity - peakReserved),
     shortfallQuantity,
+    peakReserved,
   };
 }
 

@@ -513,6 +513,18 @@ describe('calculateReadyAt (BL-05)', () => {
       new Date('2026-11-16T14:00:00+07:00').toISOString(),
     );
   });
+
+  it('uses explicit readyAt when confirmed by staff, bypassing default cooldown', () => {
+    const result = calculateReadyAt({
+      returnAt: '2026-11-16T12:00:00+07:00',
+      actualReturnAt: '2026-11-16T13:00:00+07:00',
+      readyAt: '2026-11-16T13:20:00+07:00',
+      now: '2026-11-16T13:25:00+07:00',
+    });
+    expect(new Date(result.readyAt).toISOString()).toBe(
+      new Date('2026-11-16T13:20:00+07:00').toISOString(),
+    );
+  });
 });
 
 describe('calculateAvailableQuantity (BL-06)', () => {

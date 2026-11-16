@@ -203,6 +203,7 @@ export class AdminFleetService {
         'b.pickup_at AS "pickupAt"',
         'b.return_at AS "returnAt"',
         'b.actual_return_at AS "actualReturnAt"',
+        'b.ready_at AS "readyAt"',
         'b.total_amount::text AS "totalAmount"',
         'b.currency_code AS "currencyCode"',
         'u.name AS "customerName"',

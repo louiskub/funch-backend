@@ -8,6 +8,7 @@ function decision(allowed: boolean, reason: string): PolicyDecision {
 export interface CalculateReadyAtInput {
   returnAt: IsoInstant;
   actualReturnAt: IsoInstant | null;
+  readyAt?: IsoInstant | null;
   now?: IsoInstant;
 }
 
@@ -18,6 +19,14 @@ export interface CalculateReadyAtResult {
 export function calculateReadyAt(
   input: CalculateReadyAtInput,
 ): CalculateReadyAtResult {
+  if (input.readyAt) {
+    return {
+      readyAt: parseIsoInstant(input.readyAt)
+        .toUTC()
+        .toISO({ suppressMilliseconds: true })!,
+    };
+  }
+
   if (input.actualReturnAt !== null) {
     return {
       readyAt: parseIsoInstant(input.actualReturnAt)

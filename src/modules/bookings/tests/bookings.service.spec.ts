@@ -53,4 +53,65 @@ describe('Booking pickup readiness response', () => {
       ConflictException,
     );
   });
+
+  it('rejects markReady if the car has not been physically returned', async () => {
+    const txBookingQuery = {
+      select: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      setLock: jest.fn().mockReturnThis(),
+      getRawOne: jest.fn().mockResolvedValue({
+        id: 'b-1',
+        carId: 'c-1',
+        actualReturnAt: null,
+      }),
+    };
+    const manager = {
+      getRepository: () => ({
+        createQueryBuilder: () => txBookingQuery,
+      }),
+    };
+    const txService = Object.create(BookingsService.prototype) as BookingsService;
+    Object.assign(txService, {
+      db: { transaction: (cb: (m: any) => any) => cb(manager) },
+    });
+    await expect(
+      txService.markReady('b-1', { id: 'admin-1', role: 'ADMIN' } as any),
+    ).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('updates readyAt and returns readiness on markReady when returned', async () => {
+    const updateFn = jest.fn().mockResolvedValue({ affected: 1 });
+    const txBookingQuery = {
+      select: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      setLock: jest.fn().mockReturnThis(),
+      getRawOne: jest.fn().mockResolvedValue({
+        id: 'b-1',
+        carId: 'c-1',
+        actualReturnAt: '2026-11-16T10:00:00Z',
+      }),
+    };
+    const manager = {
+      getRepository: () => ({
+        createQueryBuilder: () => txBookingQuery,
+        update: updateFn,
+      }),
+    };
+    const txService = Object.create(BookingsService.prototype) as BookingsService;
+    Object.assign(txService, {
+      db: { transaction: (cb: (m: any) => any) => cb(manager) },
+    });
+    const result = await txService.markReady('b-1', {
+      id: 'admin-1',
+      role: 'ADMIN',
+    } as any);
+    expect(result.id).toBe('b-1');
+    expect(result.carId).toBe('c-1');
+    expect(result.readyBy).toBe('admin-1');
+    expect(result.readyAt).toBeDefined();
+    expect(updateFn).toHaveBeenCalledWith(
+      { id: 'b-1' },
+      expect.objectContaining({ readyBy: 'admin-1' }),
+    );
+  });
 });

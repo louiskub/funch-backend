@@ -29,6 +29,10 @@ export class Booking extends BaseEntity {
   @Column({ name: 'return_at', type: 'timestamptz' }) returnAt!: Date;
   @Column({ name: 'actual_return_at', type: 'timestamptz', nullable: true })
   actualReturnAt!: Date | null;
+  @Column({ name: 'ready_at', type: 'timestamptz', nullable: true })
+  readyAt!: Date | null;
+  @Column({ name: 'ready_by', type: 'uuid', nullable: true })
+  readyBy!: string | null;
   @Column({ type: 'enum', enum: BookingStatus, default: BookingStatus.PENDING })
   status!: BookingStatus;
   @Column({ name: 'currency_code', type: 'char', length: 3 })

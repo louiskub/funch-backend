@@ -173,6 +173,16 @@ export class BookingsController {
     return this.bookings.confirmReturn(id);
   }
 
+  @Post('admin/bookings/:id/ready')
+  @UseGuards(SessionAuthGuard, RoleGuard)
+  @Roles(UserRole.ADMIN)
+  markReady(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.bookings.markReady(id, request.authUser!);
+  }
+
   @Post('admin/bookings/:id/charges')
   @UseGuards(SessionAuthGuard, RoleGuard)
   @Roles(UserRole.ADMIN)

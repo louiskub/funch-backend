@@ -474,10 +474,12 @@ export class BookingsService {
         't.brand AS brand',
         't.model AS model',
         'br.name AS "branchName"',
+        'c.license_plate AS "licensePlate"',
       ])
       .innerJoin('car_type_branch', 'o', 'o.id = b.car_type_branch_id')
       .innerJoin('car_type', 't', 't.id = o.car_type_id')
       .innerJoin('branch', 'br', 'br.id = b.pickup_branch_id')
+      .leftJoin('car', 'c', 'c.id = b.car_id')
       .where('b.user_id = :userId', { userId })
       .orderBy('b.created_at', 'DESC')
       .getRawMany();
@@ -495,6 +497,8 @@ export class BookingsService {
         'b.pickup_at AS "pickupAt"',
         'b.return_at AS "returnAt"',
         'b.actual_return_at AS "actualReturnAt"',
+        'b.ready_at AS "readyAt"',
+        'b.ready_by AS "readyBy"',
         'b.currency_code AS "currencyCode"',
         'b.daily_rate_at_booking::text AS "dailyRateAtBooking"',
         'b.hourly_rate_at_booking::text AS "hourlyRateAtBooking"',
@@ -509,10 +513,14 @@ export class BookingsService {
         't.brand AS brand',
         't.model AS model',
         'br.name AS "branchName"',
+        'c.license_plate AS "licensePlate"',
+        'c.vin AS "carVin"',
+        'c.year AS "carYear"',
       ])
       .innerJoin('car_type_branch', 'o', 'o.id = b.car_type_branch_id')
       .innerJoin('car_type', 't', 't.id = o.car_type_id')
       .innerJoin('branch', 'br', 'br.id = b.pickup_branch_id')
+      .leftJoin('car', 'c', 'c.id = b.car_id')
       .where('b.id = :id', { id })
       .getRawOne<Record<string, any>>();
     if (!booking) throw new NotFoundException('Booking not found');
@@ -603,6 +611,7 @@ export class BookingsService {
         'b.pickup_at AS "pickupAt"',
         'b.return_at AS "returnAt"',
         'b.actual_return_at AS "actualReturnAt"',
+        'b.ready_at AS "readyAt"',
         'b.status AS status',
       ])
       .where(
@@ -618,6 +627,9 @@ export class BookingsService {
         returnAt: new Date(String(b.returnAt)).toISOString(),
         actualReturnAt: b.actualReturnAt
           ? new Date(String(b.actualReturnAt)).toISOString()
+          : null,
+        readyAt: b.readyAt
+          ? new Date(String(b.readyAt)).toISOString()
           : null,
         now,
       }).readyAt,
@@ -644,6 +656,7 @@ export class BookingsService {
         'b.pickup_at AS "pickupAt"',
         'b.return_at AS "returnAt"',
         'b.actual_return_at AS "actualReturnAt"',
+        'b.ready_at AS "readyAt"',
       ])
       .where(
         "b.car_type_branch_id = :ctbId AND b.status IN ('PENDING','APPROVED','IN_USE','COMPLETED')",
@@ -659,6 +672,9 @@ export class BookingsService {
         returnAt: new Date(String(row.returnAt)).toISOString(),
         actualReturnAt: row.actualReturnAt
           ? new Date(String(row.actualReturnAt)).toISOString()
+          : null,
+        readyAt: row.readyAt
+          ? new Date(String(row.readyAt)).toISOString()
           : null,
         now,
       }).readyAt,
@@ -687,6 +703,8 @@ export class BookingsService {
         'b.pickup_at AS "pickupAt"',
         'b.return_at AS "returnAt"',
         'b.actual_return_at AS "actualReturnAt"',
+        'b.ready_at AS "readyAt"',
+        'b.ready_by AS "readyBy"',
         'b.total_amount::text AS "totalAmount"',
         'b.currency_code AS "currencyCode"',
         'u.name AS "customerName"',
@@ -697,11 +715,13 @@ export class BookingsService {
         'br.name AS "branchName"',
         'br.id AS "branchId"',
         'br.timezone AS timezone',
+        'c.license_plate AS "licensePlate"',
       ])
       .innerJoin('app_user', 'u', 'u.id = b.user_id')
       .innerJoin('car_type_branch', 'o', 'o.id = b.car_type_branch_id')
       .innerJoin('car_type', 't', 't.id = o.car_type_id')
       .innerJoin('branch', 'br', 'br.id = b.pickup_branch_id')
+      .leftJoin('car', 'c', 'c.id = b.car_id')
       .orderBy('b.created_at');
     if (status !== undefined) builder.where('b.status = :status', { status });
     const bookings = await builder.getRawMany<{
@@ -711,6 +731,8 @@ export class BookingsService {
       pickupAt: string | Date;
       returnAt: string | Date;
       actualReturnAt: string | Date | null;
+      readyAt: string | Date | null;
+      readyBy: string | null;
       totalAmount: string;
       currencyCode: string;
       customerName: string;
@@ -721,6 +743,7 @@ export class BookingsService {
       branchName: string;
       branchId: string;
       timezone: string;
+      licensePlate: string | null;
     }>();
     if (!bookings.length) return bookings;
     const charges = await this.additionalChargeRepo
@@ -977,7 +1000,7 @@ export class BookingsService {
         'c.license_plate AS "licensePlate"',
         'c.status AS status',
         `EXISTS(SELECT 1 FROM booking active WHERE active.car_id = c.id AND active.status = 'IN_USE' AND active.actual_return_at IS NULL) AS "isOutOnRent"`,
-        `COALESCE((SELECT CASE WHEN previous.actual_return_at IS NULL THEN previous.return_at + interval '2 hours' ELSE previous.actual_return_at + interval '1 hour' END FROM booking previous WHERE previous.car_id = c.id AND previous.status IN ('IN_USE','COMPLETED') ORDER BY COALESCE(previous.actual_return_at, previous.return_at) DESC LIMIT 1), '-infinity'::timestamptz) AS "readyAt"`,
+        `COALESCE((SELECT CASE WHEN previous.ready_at IS NOT NULL THEN previous.ready_at WHEN previous.actual_return_at IS NULL THEN previous.return_at + interval '2 hours' ELSE previous.actual_return_at + interval '1 hour' END FROM booking previous WHERE previous.car_id = c.id AND previous.status IN ('IN_USE','COMPLETED') ORDER BY COALESCE(previous.ready_at, previous.actual_return_at, previous.return_at) DESC LIMIT 1), '-infinity'::timestamptz) AS "readyAt"`,
       ])
       .where('c.car_type_branch_id = :carTypeBranchId AND c.is_active', {
         carTypeBranchId: booking.carTypeBranchId,
@@ -1006,11 +1029,12 @@ export class BookingsService {
       .select([
         'b.return_at AS "returnAt"',
         'b.actual_return_at AS "actualReturnAt"',
+        'b.ready_at AS "readyAt"',
       ])
       .where("b.car_id = :carId AND b.status IN ('IN_USE','COMPLETED')", {
         carId,
       })
-      .orderBy('COALESCE(b.actual_return_at, b.return_at)', 'DESC')
+      .orderBy('COALESCE(b.ready_at, b.actual_return_at, b.return_at)', 'DESC')
       .limit(1)
       .getRawOne<Record<string, any>>();
     return row
@@ -1018,6 +1042,9 @@ export class BookingsService {
           returnAt: new Date(String(row.returnAt)).toISOString(),
           actualReturnAt: row.actualReturnAt
             ? new Date(String(row.actualReturnAt)).toISOString()
+            : null,
+          readyAt: row.readyAt
+            ? new Date(String(row.readyAt)).toISOString()
             : null,
           now: new Date().toISOString(),
         }).readyAt
@@ -1245,6 +1272,45 @@ export class BookingsService {
         id,
         status: 'COMPLETED',
         finalAmount: await this.finalAmount(manager, id),
+      };
+    });
+  }
+
+  async markReady(id: string, actor: AuthUser) {
+    return this.db.transaction(async (manager) => {
+      const bookingRepo = manager.getRepository(Booking);
+      const b = await bookingRepo
+        .createQueryBuilder('b')
+        .select([
+          'b.id AS id',
+          'b.status AS status',
+          'b.car_id AS "carId"',
+          'b.actual_return_at AS "actualReturnAt"',
+          'b.ready_at AS "readyAt"',
+        ])
+        .where('b.id = :id', { id })
+        .setLock('pessimistic_write')
+        .getRawOne<Record<string, any>>();
+      if (!b) throw new NotFoundException('Booking not found');
+      if (!b.actualReturnAt) {
+        throw new ConflictException(
+          'Vehicle must be physically returned before marking it ready',
+        );
+      }
+      if (!b.carId) {
+        throw new ConflictException('No car is assigned to this booking');
+      }
+
+      const readyAt = new Date();
+      await bookingRepo.update(
+        { id },
+        { readyAt, readyBy: actor.id, updatedAt: () => 'now()' },
+      );
+      return {
+        id,
+        carId: b.carId,
+        readyAt: readyAt.toISOString(),
+        readyBy: actor.id,
       };
     });
   }

@@ -11,7 +11,9 @@ import { seedMain } from '../src/platform/database/seedings/main.seeding';
 
 const origin = 'http://localhost:3000';
 const branchId = '20000000-0000-4000-8000-000000000001';
+const newYorkBranchId = '20000000-0000-4000-8000-000000000002';
 const offerId = '40000000-0000-4000-8000-000000000001';
+const newYorkOfferId = '40000000-0000-4000-8000-000000000002';
 const future = (days: number) =>
   new Date(Date.now() + days * 86_400_000).toISOString();
 
@@ -88,6 +90,7 @@ describe('Booking API (isolated PostgreSQL)', () => {
     options: Array<{ carOptionId: string; quantity: number }> = [],
     pickupAt = future(3),
     returnAt = future(4),
+    bookingOfferId = offerId,
   ) {
     const checkoutKey = randomUUID();
     const customerEmail = `${randomUUID()}@booking.test`;
@@ -96,7 +99,7 @@ describe('Booking API (isolated PostgreSQL)', () => {
       .post('/api/bookings/register-checkout')
       .set('Origin', origin)
       .send({
-        offerId,
+        offerId: bookingOfferId,
         pickupAt,
         returnAt,
         options,
@@ -110,7 +113,13 @@ describe('Booking API (isolated PostgreSQL)', () => {
     return {
       id: response.body.data.id as string,
       cookie: response.headers['set-cookie'][0].split(';')[0],
-      input: { offerId, pickupAt, returnAt, options, checkoutKey },
+      input: {
+        offerId: bookingOfferId,
+        pickupAt,
+        returnAt,
+        options,
+        checkoutKey,
+      },
       customerEmail,
       customerPassword,
     };
@@ -295,6 +304,60 @@ describe('Booking API (isolated PostgreSQL)', () => {
       .get(`/api/admin/fleet/timeline?branchId=${branchId}&month=${pastMonth}`)
       .set('Cookie', adminCookie)
       .expect(400);
+  });
+
+  it('keeps New York DST transition bookings in the correct local calendar day', async () => {
+    const springPickup = DateTime.fromISO('2027-03-15T00:30:00', {
+      zone: 'America/New_York',
+    });
+    const fallPickup = DateTime.fromISO('2027-11-07T23:30:00', {
+      zone: 'America/New_York',
+    });
+    await createBooking(
+      [],
+      springPickup.toUTC().toISO()!,
+      springPickup.plus({ hours: 1 }).toUTC().toISO()!,
+      newYorkOfferId,
+    );
+    await createBooking(
+      [],
+      fallPickup.toUTC().toISO()!,
+      fallPickup.plus({ hours: 1 }).toUTC().toISO()!,
+      newYorkOfferId,
+    );
+
+    const march = await request(app.getHttpServer())
+      .get(
+        `/api/admin/fleet/timeline?branchId=${newYorkBranchId}&month=2027-03`,
+      )
+      .set('Cookie', adminCookie)
+      .expect(200);
+    const marchOffer = objects(object(march.body.data).matrix).find(
+      (item) => item.carTypeBranchId === newYorkOfferId,
+    );
+    if (!marchOffer) throw new Error('Expected the New York fleet row');
+    const marchDays = objects(marchOffer.days);
+    expect(
+      integer(marchDays.find((day) => day.date === '2027-03-14')?.peakPending),
+    ).toBe(0);
+    expect(
+      integer(marchDays.find((day) => day.date === '2027-03-15')?.peakPending),
+    ).toBeGreaterThanOrEqual(1);
+
+    const november = await request(app.getHttpServer())
+      .get(
+        `/api/admin/fleet/timeline?branchId=${newYorkBranchId}&month=2027-11`,
+      )
+      .set('Cookie', adminCookie)
+      .expect(200);
+    const novemberOffer = objects(object(november.body.data).matrix).find(
+      (item) => item.carTypeBranchId === newYorkOfferId,
+    );
+    if (!novemberOffer) throw new Error('Expected the New York fleet row');
+    const novemberDay = objects(novemberOffer.days).find(
+      (day) => day.date === '2027-11-07',
+    );
+    expect(integer(novemberDay?.peakPending)).toBeGreaterThanOrEqual(1);
   });
 
   it('reserves option stock on pending checkout and releases it when rejected by admin', async () => {

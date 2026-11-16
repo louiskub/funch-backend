@@ -307,7 +307,10 @@ describe('Booking API (isolated PostgreSQL)', () => {
   });
 
   it('keeps New York DST transition bookings in the correct local calendar day', async () => {
-    const springPickup = DateTime.fromISO('2027-03-15T00:30:00', {
+    const springPickup = DateTime.fromISO('2027-03-14T23:30:00', {
+      zone: 'America/New_York',
+    });
+    const springNextDayPickup = DateTime.fromISO('2027-03-15T00:30:00', {
       zone: 'America/New_York',
     });
     const fallPickup = DateTime.fromISO('2027-11-07T23:30:00', {
@@ -316,7 +319,13 @@ describe('Booking API (isolated PostgreSQL)', () => {
     await createBooking(
       [],
       springPickup.toUTC().toISO()!,
-      springPickup.plus({ hours: 1 }).toUTC().toISO()!,
+      springPickup.plus({ minutes: 75 }).toUTC().toISO()!,
+      newYorkOfferId,
+    );
+    await createBooking(
+      [],
+      springNextDayPickup.toUTC().toISO()!,
+      springNextDayPickup.plus({ hours: 1 }).toUTC().toISO()!,
       newYorkOfferId,
     );
     await createBooking(
@@ -339,10 +348,10 @@ describe('Booking API (isolated PostgreSQL)', () => {
     const marchDays = objects(marchOffer.days);
     expect(
       integer(marchDays.find((day) => day.date === '2027-03-14')?.peakPending),
-    ).toBe(0);
+    ).toBe(1);
     expect(
       integer(marchDays.find((day) => day.date === '2027-03-15')?.peakPending),
-    ).toBeGreaterThanOrEqual(1);
+    ).toBe(2);
 
     const november = await request(app.getHttpServer())
       .get(

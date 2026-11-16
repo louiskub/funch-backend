@@ -67,8 +67,12 @@ export class BookingsController {
 
   @Get('bookings/me')
   @UseGuards(SessionAuthGuard)
-  mine(@Req() request: AuthenticatedRequest) {
-    return this.bookings.mine(request.authUser!.id);
+  mine(
+    @Req() request: AuthenticatedRequest,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+  ) {
+    return this.bookings.mine(request.authUser!.id, page, pageSize);
   }
 
   @Get('bookings/:id')
@@ -92,8 +96,20 @@ export class BookingsController {
   @Get('admin/bookings')
   @UseGuards(SessionAuthGuard, RoleGuard)
   @Roles(UserRole.ADMIN)
-  queue(@Query('status') status?: string) {
-    return this.bookings.queue(status);
+  queue(
+    @Query('status') status?: string,
+    @Query('branchId') branchId?: string,
+    @Query('query') query?: string,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+  ) {
+    return this.bookings.queue({
+      status,
+      branchId,
+      query,
+      ...(page !== undefined ? { page: Number(page) } : {}),
+      ...(pageSize !== undefined ? { pageSize: Number(pageSize) } : {}),
+    });
   }
 
   @Post('admin/bookings/:id/approve')
@@ -223,8 +239,13 @@ export class BookingsController {
   @Get('admin/members')
   @UseGuards(SessionAuthGuard, RoleGuard)
   @Roles(UserRole.ADMIN)
-  members(@Query('query') query?: string) {
-    return this.bookings.members(query);
+  members(
+    @Query('query') query?: string,
+    @Query('status') status?: string,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+  ) {
+    return this.bookings.members(query, status, page, pageSize);
   }
 
   @Get('admin/members/:id')

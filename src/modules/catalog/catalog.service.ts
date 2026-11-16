@@ -113,13 +113,91 @@ export class CatalogService {
       .getRawMany();
   }
 
-  async offers(branchId: string) {
-    const rows = await this.offerQuery()
+  async offers(
+    branchId: string,
+    options: {
+      page?: string;
+      pageSize?: string;
+      category?: string;
+      sortBy?: string;
+    } = {},
+  ) {
+    const page = Math.max(1, Math.floor(Number(options.page) || 1));
+    const pageSize = Math.min(
+      100,
+      Math.max(1, Math.floor(Number(options.pageSize) || 10)),
+    );
+    const query = this.offerQuery().where(
+      'o.branch_id = :branchId AND o.is_active',
+      { branchId },
+    );
+    const vehicleName = "LOWER(t.brand || ' ' || t.model)";
+    const isSuv = `(${vehicleName} LIKE '%suv%' OR t.features::text ILIKE '%suv%')`;
+    if (options.category === 'SUV') query.andWhere(isSuv);
+    if (options.category === 'Van')
+      query.andWhere(
+        `(${vehicleName} LIKE '%van%' OR ${vehicleName} LIKE '%commuter%' OR t.seats > 5)`,
+      );
+    if (options.category === 'Sedan')
+      query.andWhere(`NOT ${isSuv} AND t.seats <= 5`);
+
+    const categoryRows = this.offerRepo
+      .createQueryBuilder('o')
+      .select([
+        't.brand AS brand',
+        't.model AS model',
+        't.seats AS seats',
+        't.features AS features',
+      ])
+      .innerJoin('car_type', 't', 't.id = o.car_type_id AND t.is_active')
       .where('o.branch_id = :branchId AND o.is_active', { branchId })
-      .orderBy('t.brand')
-      .addOrderBy('t.model')
-      .getRawMany<CatalogOfferRow>();
-    return this.withImages(rows);
+      .getRawMany<{
+        brand: string;
+        model: string;
+        seats: number;
+        features: string[];
+      }>();
+    const orderBy = options.sortBy;
+    if (orderBy === 'price-asc') query.orderBy('o.base_daily_rate', 'ASC');
+    else if (orderBy === 'price-desc')
+      query.orderBy('o.base_daily_rate', 'DESC');
+    else if (orderBy === 'name') query.orderBy('t.brand', 'ASC');
+    else query.orderBy('t.brand', 'ASC');
+    query.addOrderBy('t.model', 'ASC').addOrderBy('o.id', 'ASC');
+
+    const [totalRow, rows, categories] = await Promise.all([
+      query
+        .clone()
+        .select('COUNT(DISTINCT o.id)', 'total')
+        .orderBy()
+        .getRawOne<{ total: string }>(),
+      query
+        .offset((page - 1) * pageSize)
+        .limit(pageSize)
+        .getRawMany<CatalogOfferRow>(),
+      categoryRows,
+    ]);
+    const availableCategories = new Set<string>();
+    for (const offer of categories) {
+      const name = `${offer.brand} ${offer.model}`.toLowerCase();
+      const features = offer.features.join(' ').toLowerCase();
+      if (name.includes('suv') || features.includes('suv'))
+        availableCategories.add('SUV');
+      else if (
+        name.includes('van') ||
+        name.includes('commuter') ||
+        offer.seats > 5
+      )
+        availableCategories.add('Van');
+      else availableCategories.add('Sedan');
+    }
+    return {
+      items: this.withImages(rows),
+      page,
+      pageSize,
+      total: Number(totalRow?.total ?? 0),
+      categories: [...availableCategories],
+    };
   }
 
   async offer(offerId: string) {

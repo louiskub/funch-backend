@@ -260,15 +260,12 @@ export function calculateLateReturnCharges(
   const actualDays = Math.ceil(
     durationMillis(pickupAt, actualReturnAt) / DAY_MS,
   );
+  const extraDays = actualDays - bookedDays;
+  if (extraDays === 0) return additionalCharges;
   for (const option of options) {
     validateQuantity(option.quantity, 'Option quantity');
     validateQuantity(option.chargedUnits, 'Booked option units');
     if (option.pricingType === 'FIXED') continue;
-    const extraDays = Math.max(
-      0,
-      actualDays - Math.max(bookedDays, option.chargedUnits),
-    );
-    if (extraDays === 0) continue;
     const quantity =
       option.pricingType === 'PER_UNIT_PER_DAY' ? option.quantity : 1;
     const unitAmount = multiplyDecimalByInteger(

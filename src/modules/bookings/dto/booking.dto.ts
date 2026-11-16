@@ -7,6 +7,7 @@ import {
   IsOptional,
   IsString,
   IsUUID,
+  Matches,
   Length,
   Max,
   MaxLength,
@@ -30,10 +31,21 @@ export class QuoteInput {
   @ValidateNested({ each: true })
   @Type(() => BookingOptionInput)
   options!: BookingOptionInput[];
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(30)
+  @IsUUID('all', { each: true })
+  availabilityOptionIds?: string[];
 }
 
 export class CheckoutInput extends QuoteInput {
   @IsUUID() checkoutKey!: string;
+  @IsOptional()
+  @IsString()
+  @MaxLength(32)
+  @Matches(/^(?:0|[1-9]\d*)(?:\.\d+)?$/)
+  expectedTotalAmount?: string;
   @IsOptional() @IsString() @Length(1, 120) customerName?: string;
   @IsOptional() @IsEmail() @MaxLength(254) customerEmail?: string;
   @IsOptional()

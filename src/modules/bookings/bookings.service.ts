@@ -20,7 +20,7 @@ import {
   canCancelBooking,
   summarizeBookings,
 } from '../../core';
-import { addDecimals } from '../../core/decimal.core';
+import { addDecimals, compareDecimals } from '../../core/decimal.core';
 import { parseIsoInstant } from '../../core/time.core';
 import { AppUser } from '../auth/entities/app-user.entity';
 import { UserSession } from '../auth/entities/user-session.entity';
@@ -64,6 +64,13 @@ type QuoteResult = {
   dailyRateAtBooking: string;
   hourlyRateAtBooking: string;
   availableVehicles: number;
+  optionAvailability: Array<{
+    carOptionId: string;
+    pricingType: PriceRow['pricingType'];
+    unitPrice: string;
+    quantityStock: number | null;
+    availableQuantity: number | null;
+  }>;
   options: Array<{
     carOptionId: string;
     quantity: number;
@@ -152,75 +159,120 @@ export class BookingsService {
     if (new Set(selected.map((x) => x.carOptionId)).size !== selected.length)
       throw new BadRequestException('Each option may be selected once');
     const lines: QuoteResult['options'] = [];
-    for (const item of selected) {
-      const option = await (
-        manager ? manager.getRepository(CarOption) : this.carOptionRepo
-      )
-        .createQueryBuilder('co')
-        .select([
-          'co.id AS id',
-          'co.pricing_type AS "pricingType"',
-          'co.quantity_stock AS "quantityStock"',
-          'co.price::text AS price',
-          ':currency AS currency',
-        ])
-        .where(
-          'co.id = :optionId AND co.branch_id = :branchId AND co.is_active',
-          {
-            optionId: item.carOptionId,
-            branchId: offer.branchId,
-            currency: offer.currency,
-          },
+    const optionAvailability: QuoteResult['optionAvailability'] = [];
+    const selectedById = new Map(
+      selected.map((item) => [item.carOptionId, item]),
+    );
+    const optionIds = new Set([
+      ...selectedById.keys(),
+      ...(input.availabilityOptionIds ?? []),
+    ]);
+    const optionRows = optionIds.size
+      ? await (manager ? manager.getRepository(CarOption) : this.carOptionRepo)
+          .createQueryBuilder('co')
+          .select([
+            'co.id AS id',
+            'co.pricing_type AS "pricingType"',
+            'co.quantity_stock AS "quantityStock"',
+            'co.price::text AS price',
+            ':currency AS currency',
+          ])
+          .where(
+            'co.id IN (:...optionIds) AND co.branch_id = :branchId AND co.is_active',
+            {
+              optionIds: [...optionIds],
+              branchId: offer.branchId,
+              currency: offer.currency,
+            },
+          )
+          .getRawMany<PriceRow>()
+      : [];
+    if (optionRows.length !== optionIds.size)
+      throw new BadRequestException('An option is unavailable at this branch');
+    const optionById = new Map(optionRows.map((option) => [option.id, option]));
+    const rawSupportedOptionIds: unknown = offer.supportedOptionIds;
+    const supportedOptionIds = Array.isArray(rawSupportedOptionIds)
+      ? rawSupportedOptionIds.filter(
+          (id: unknown): id is string => typeof id === 'string',
         )
-        .getRawOne<PriceRow>();
+      : [];
+    if (
+      supportedOptionIds.length > 0 &&
+      [...optionIds].some((optionId) => !supportedOptionIds.includes(optionId))
+    ) {
+      throw new BadRequestException(
+        'An option is not supported for this vehicle model',
+      );
+    }
+    for (const [optionId, item] of selectedById) {
+      const option = optionById.get(optionId);
       if (!option)
         throw new BadRequestException(
           'An option is unavailable at this branch',
         );
-      if (
-        Array.isArray(offer.supportedOptionIds) &&
-        offer.supportedOptionIds.length > 0 &&
-        !offer.supportedOptionIds.includes(item.carOptionId)
-      ) {
-        throw new BadRequestException(
-          'An option is not supported for this vehicle model',
-        );
-      }
       if (option.quantityStock !== null && item.quantity > option.quantityStock)
-        throw new BadRequestException(
-          `${item.carOptionId} exceeds available stock`,
-        );
-      let availableQuantity: number | null = null;
-      if (option.quantityStock !== null) {
-        const reservations = await (
+        throw new BadRequestException(`${optionId} exceeds available stock`);
+    }
+    const stockTrackedIds = optionRows
+      .filter((option) => option.quantityStock !== null)
+      .map((option) => option.id);
+    const reservations = stockTrackedIds.length
+      ? await (
           manager
             ? manager.getRepository(BookingOption)
             : this.bookingOptionRepo
         )
           .createQueryBuilder('bo')
           .select([
+            'bo.car_option_id AS "carOptionId"',
             'bo.quantity AS quantity',
             'b.pickup_at AS "pickupAt"',
             'COALESCE(b.actual_return_at, b.return_at) AS "returnAt"',
           ])
           .innerJoin('booking', 'b', 'b.id = bo.booking_id')
           .where(
-            "bo.car_option_id = :optionId AND b.status IN ('PENDING','APPROVED','IN_USE')",
-            {
-              optionId: item.carOptionId,
-            },
+            "bo.car_option_id IN (:...optionIds) AND b.status IN ('PENDING','APPROVED','IN_USE')",
+            { optionIds: stockTrackedIds },
           )
-          .getRawMany<Record<string, any>>();
+          .getRawMany<{
+            carOptionId: string;
+            quantity: number;
+            pickupAt: string | Date;
+            returnAt: string | Date;
+          }>()
+      : [];
+    const reservationsByOption = new Map<string, typeof reservations>();
+    for (const reservation of reservations) {
+      const rows = reservationsByOption.get(reservation.carOptionId) ?? [];
+      rows.push(reservation);
+      reservationsByOption.set(reservation.carOptionId, rows);
+    }
+    for (const optionId of optionIds) {
+      const option = optionById.get(optionId);
+      if (!option) continue;
+      const item = selectedById.get(optionId);
+      let availableQuantity: number | null = null;
+      if (option.quantityStock !== null) {
         availableQuantity = calculateAvailableQuantity({
           requestedInterval: { startsAt: pickupAt, endsAt: returnAt },
           capacity: option.quantityStock,
-          reservedIntervals: reservations.map((row) => ({
-            startsAt: new Date(String(row.pickupAt)).toISOString(),
-            endsAt: new Date(String(row.returnAt)).toISOString(),
-            quantity: Number(row.quantity),
-          })),
+          reservedIntervals: (reservationsByOption.get(optionId) ?? []).map(
+            (row) => ({
+              startsAt: new Date(String(row.pickupAt)).toISOString(),
+              endsAt: new Date(String(row.returnAt)).toISOString(),
+              quantity: row.quantity,
+            }),
+          ),
         }).availableQuantity;
       }
+      optionAvailability.push({
+        carOptionId: optionId,
+        pricingType: option.pricingType,
+        unitPrice: option.price,
+        quantityStock: option.quantityStock,
+        availableQuantity,
+      });
+      if (!item) continue;
       const price = calculateOptionPrice({
         pickupAt,
         returnAt,
@@ -229,7 +281,7 @@ export class BookingsService {
         quantity: item.quantity,
       });
       lines.push({
-        carOptionId: item.carOptionId,
+        carOptionId: optionId,
         quantity: item.quantity,
         unitPrice: option.price,
         chargedUnits: price.chargedUnits,
@@ -277,6 +329,7 @@ export class BookingsService {
       dailyRateAtBooking: offer.daily,
       hourlyRateAtBooking: offer.hourly,
       availableVehicles: vehicleAvailability.availableQuantity,
+      optionAvailability,
       options: lines,
     };
   }
@@ -404,16 +457,19 @@ export class BookingsService {
         .getRawOne();
       const quote = await this.quote(input, manager);
       if (quote.availableVehicles < 1)
-        throw new ConflictException('Vehicle capacity is unavailable');
+        throw new ConflictException('AVAILABILITY_CHANGED');
       for (const line of quote.options) {
         if (
           line.availableQuantity !== null &&
           line.availableQuantity < line.quantity
         )
-          throw new ConflictException(
-            `Option ${line.carOptionId} has insufficient stock`,
-          );
+          throw new ConflictException('AVAILABILITY_CHANGED');
       }
+      if (
+        input.expectedTotalAmount !== undefined &&
+        compareDecimals(input.expectedTotalAmount, quote.totalAmount) !== 0
+      )
+        throw new ConflictException('PRICE_CHANGED');
       const bookingId = randomUUID();
       const bookingNumber = `F${Date.now().toString(36).toUpperCase()}${randomBytes(3).toString('hex').toUpperCase()}`;
       await bookingRepo.insert({
@@ -460,8 +516,14 @@ export class BookingsService {
     };
   }
 
-  async mine(userId: string) {
-    return this.bookingRepo
+  async mine(userId: string, pageInput?: string, pageSizeInput?: string) {
+    const paginated = pageInput !== undefined || pageSizeInput !== undefined;
+    const page = Math.max(1, Math.floor(Number(pageInput) || 1));
+    const pageSize = Math.min(
+      100,
+      Math.max(1, Math.floor(Number(pageSizeInput) || 10)),
+    );
+    const builder = this.bookingRepo
       .createQueryBuilder('b')
       .select([
         'b.id AS id',
@@ -482,7 +544,15 @@ export class BookingsService {
       .leftJoin('car', 'c', 'c.id = b.car_id')
       .where('b.user_id = :userId', { userId })
       .orderBy('b.created_at', 'DESC')
-      .getRawMany();
+      .addOrderBy('b.id', 'DESC');
+    const [total, items] = await Promise.all([
+      paginated ? this.bookingRepo.count({ where: { userId } }) : undefined,
+      (paginated
+        ? builder.offset((page - 1) * pageSize).limit(pageSize)
+        : builder
+      ).getRawMany(),
+    ]);
+    return paginated ? { items, page, pageSize, total } : items;
   }
 
   async get(id: string, actor: AuthUser) {
@@ -628,9 +698,7 @@ export class BookingsService {
         actualReturnAt: b.actualReturnAt
           ? new Date(String(b.actualReturnAt)).toISOString()
           : null,
-        readyAt: b.readyAt
-          ? new Date(String(b.readyAt)).toISOString()
-          : null,
+        readyAt: b.readyAt ? new Date(String(b.readyAt)).toISOString() : null,
         now,
       }).readyAt,
       quantity: 1,
@@ -693,7 +761,15 @@ export class BookingsService {
       .map(({ id }) => id);
   }
 
-  async queue(status?: string) {
+  async queue(
+    filters: {
+      status?: string;
+      branchId?: string;
+      query?: string;
+      page?: number;
+      pageSize?: number;
+    } = {},
+  ) {
     const builder = this.bookingRepo
       .createQueryBuilder('b')
       .select([
@@ -723,8 +799,105 @@ export class BookingsService {
       .innerJoin('branch', 'br', 'br.id = b.pickup_branch_id')
       .leftJoin('car', 'c', 'c.id = b.car_id')
       .orderBy('b.created_at');
-    if (status !== undefined) builder.where('b.status = :status', { status });
-    const bookings = await builder.getRawMany<{
+    let hasFilter = false;
+    const addFilter = (
+      expression: string,
+      parameters: Record<string, string>,
+    ) => {
+      if (hasFilter) builder.andWhere(expression, parameters);
+      else builder.where(expression, parameters);
+      hasFilter = true;
+    };
+    if (filters.status === 'RETURN_REVIEW') {
+      addFilter('b.status = :status AND b.actual_return_at IS NOT NULL', {
+        status: BookingStatus.IN_USE,
+      });
+    } else if (filters.status === BookingStatus.IN_USE) {
+      addFilter('b.status = :status AND b.actual_return_at IS NULL', {
+        status: filters.status,
+      });
+    } else if (filters.status && filters.status !== 'ALL') {
+      addFilter('b.status = :status', { status: filters.status });
+    }
+    if (filters.branchId)
+      addFilter('br.id = :branchId', { branchId: filters.branchId });
+    const term = filters.query?.trim();
+    if (term)
+      addFilter(
+        '(b.booking_number ILIKE :term OR u.name ILIKE :term OR u.email ILIKE :term OR u.phone ILIKE :term OR t.brand ILIKE :term OR t.model ILIKE :term)',
+        { term: `%${term}%` },
+      );
+
+    const paginated =
+      filters.page !== undefined || filters.pageSize !== undefined;
+    const page = Math.max(1, Math.floor(filters.page || 1));
+    const pageSize = Math.min(
+      100,
+      Math.max(1, Math.floor(filters.pageSize || 20)),
+    );
+    const [totalRow, counts, branches] = paginated
+      ? await Promise.all([
+          builder
+            .clone()
+            .select('COUNT(DISTINCT b.id)', 'total')
+            .orderBy()
+            .getRawOne<{ total: string }>(),
+          this.bookingRepo
+            .createQueryBuilder('b')
+            .select('COUNT(*)::int', 'total')
+            .addSelect(
+              'COUNT(*) FILTER (WHERE b.status = :pending)::int',
+              'pending',
+            )
+            .addSelect(
+              'COUNT(*) FILTER (WHERE b.status = :approved)::int',
+              'approved',
+            )
+            .addSelect(
+              'COUNT(*) FILTER (WHERE b.status = :inUse AND b.actual_return_at IS NULL)::int',
+              'inUse',
+            )
+            .addSelect(
+              'COUNT(*) FILTER (WHERE b.status = :inUse AND b.actual_return_at IS NOT NULL)::int',
+              'returnReview',
+            )
+            .addSelect(
+              'COUNT(*) FILTER (WHERE b.status = :completed)::int',
+              'completed',
+            )
+            .addSelect(
+              'COUNT(*) FILTER (WHERE b.status = :rejected)::int',
+              'rejected',
+            )
+            .addSelect(
+              'COUNT(*) FILTER (WHERE b.status = :cancelled)::int',
+              'cancelled',
+            )
+            .setParameters({
+              pending: BookingStatus.PENDING,
+              approved: BookingStatus.APPROVED,
+              inUse: BookingStatus.IN_USE,
+              completed: BookingStatus.COMPLETED,
+              rejected: BookingStatus.REJECTED,
+              cancelled: BookingStatus.CANCELLED,
+            })
+            .getRawOne<Record<string, string>>(),
+          this.bookingRepo
+            .createQueryBuilder('b')
+            .innerJoin('branch', 'br', 'br.id = b.pickup_branch_id')
+            .select('DISTINCT br.id', 'branchId')
+            .addSelect('br.name', 'branchName')
+            .orderBy('br.name')
+            .getRawMany<{ branchId: string; branchName: string }>(),
+        ])
+      : [undefined, undefined, undefined];
+    const pageBuilder = paginated
+      ? builder
+          .clone()
+          .offset((page - 1) * pageSize)
+          .limit(pageSize)
+      : builder;
+    const bookings = await pageBuilder.getRawMany<{
       id: string;
       bookingNumber: string;
       status: string;
@@ -745,7 +918,17 @@ export class BookingsService {
       timezone: string;
       licensePlate: string | null;
     }>();
-    if (!bookings.length) return bookings;
+    if (!bookings.length)
+      return paginated
+        ? {
+            items: [],
+            page,
+            pageSize,
+            total: Number(totalRow?.total ?? 0),
+            counts,
+            branches,
+          }
+        : bookings;
     const charges = await this.additionalChargeRepo
       .createQueryBuilder('a')
       .select([
@@ -777,7 +960,7 @@ export class BookingsService {
       list.push(charge);
       byBooking.set(bookingId, list);
     }
-    return bookings.map((booking) => {
+    const items = bookings.map((booking) => {
       const bookingCharges = byBooking.get(booking.id) ?? [];
       const confirmed = charges
         .filter(
@@ -791,6 +974,16 @@ export class BookingsService {
         charges: bookingCharges,
       };
     });
+    return paginated
+      ? {
+          items,
+          page,
+          pageSize,
+          total: Number(totalRow?.total ?? 0),
+          counts,
+          branches,
+        }
+      : items;
   }
 
   async approve(id: string, actor: AuthUser) {
@@ -1464,29 +1657,82 @@ export class BookingsService {
     });
   }
 
-  async members(query?: string) {
-    const builder = this.userRepo
+  async members(
+    query?: string,
+    status?: string,
+    pageInput?: string,
+    pageSizeInput?: string,
+  ) {
+    const page = Math.max(1, Math.floor(Number(pageInput) || 1));
+    const pageSize = Math.min(
+      100,
+      Math.max(1, Math.floor(Number(pageSizeInput) || 10)),
+    );
+    const base = this.userRepo
       .createQueryBuilder('u')
-      .select([
-        'u.id AS id',
-        'u.name AS name',
-        'u.email AS email',
-        'u.phone AS phone',
-        'u.is_suspended AS "isSuspended"',
-        'u.created_at AS "createdAt"',
-        'count(b.id)::int AS "bookingCount"',
-        "count(CASE WHEN b.status IN ('PENDING', 'APPROVED', 'IN_USE') THEN 1 END)::int AS \"activeBookingCount\"",
-      ])
-      .leftJoin('booking', 'b', 'b.user_id = u.id')
-      .where("u.role = 'CUSTOMER'")
-      .groupBy('u.id')
-      .orderBy('u.name');
+      .where("u.role = 'CUSTOMER'");
     const search = query?.trim();
     if (search)
-      builder.andWhere('(u.name ILIKE :search OR u.email ILIKE :search)', {
+      base.andWhere('(u.name ILIKE :search OR u.email ILIKE :search)', {
         search: `%${search}%`,
       });
-    return builder.getRawMany();
+    if (status === 'ACTIVE') base.andWhere('u.is_suspended = false');
+    if (status === 'SUSPENDED') base.andWhere('u.is_suspended = true');
+    const statsQuery = this.userRepo
+      .createQueryBuilder('u')
+      .leftJoin('booking', 'b', 'b.user_id = u.id')
+      .select('COUNT(DISTINCT u.id)::int', 'total')
+      .addSelect(
+        'COUNT(DISTINCT u.id) FILTER (WHERE u.is_suspended = false)::int',
+        'active',
+      )
+      .addSelect(
+        'COUNT(DISTINCT u.id) FILTER (WHERE u.is_suspended = true)::int',
+        'suspended',
+      )
+      .addSelect(
+        "COUNT(DISTINCT u.id) FILTER (WHERE b.status IN ('PENDING', 'APPROVED', 'IN_USE'))::int",
+        'withActiveTrips',
+      )
+      .where("u.role = 'CUSTOMER'");
+    if (search)
+      statsQuery.andWhere('(u.name ILIKE :search OR u.email ILIKE :search)', {
+        search: `%${search}%`,
+      });
+
+    const [totalRow, stats, items] = await Promise.all([
+      base
+        .clone()
+        .select('COUNT(DISTINCT u.id)', 'total')
+        .getRawOne<{ total: string }>(),
+      statsQuery.getRawOne<Record<string, number>>(),
+      base
+        .clone()
+        .select([
+          'u.id AS id',
+          'u.name AS name',
+          'u.email AS email',
+          'u.phone AS phone',
+          'u.is_suspended AS "isSuspended"',
+          'u.created_at AS "createdAt"',
+          'count(b.id)::int AS "bookingCount"',
+          "count(CASE WHEN b.status IN ('PENDING', 'APPROVED', 'IN_USE') THEN 1 END)::int AS \"activeBookingCount\"",
+        ])
+        .leftJoin('booking', 'b', 'b.user_id = u.id')
+        .groupBy('u.id')
+        .orderBy('u.name')
+        .addOrderBy('u.id')
+        .offset((page - 1) * pageSize)
+        .limit(pageSize)
+        .getRawMany(),
+    ]);
+    return {
+      items,
+      page,
+      pageSize,
+      total: Number(totalRow?.total ?? 0),
+      stats,
+    };
   }
 
   async member(id: string) {

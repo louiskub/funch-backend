@@ -1,4 +1,10 @@
-import { Controller, Get, NotFoundException, Param } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  NotFoundException,
+  Param,
+  Query,
+} from '@nestjs/common';
 import { CatalogService } from './catalog.service';
 import {
   BranchIdParams,
@@ -21,8 +27,14 @@ export class CatalogController {
   }
 
   @Get('branches/:branchId/offers')
-  offers(@Param() { branchId }: BranchIdParams) {
-    return this.catalog.offers(branchId);
+  offers(
+    @Param() { branchId }: BranchIdParams,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+    @Query('category') category?: string,
+    @Query('sortBy') sortBy?: string,
+  ) {
+    return this.catalog.offers(branchId, { page, pageSize, category, sortBy });
   }
 
   @Get('offers/:offerId')

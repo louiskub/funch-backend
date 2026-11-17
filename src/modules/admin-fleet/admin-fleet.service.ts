@@ -18,6 +18,7 @@ import { CarTypeBranch } from './entities/car-type-branch.entity';
 import type {
   CarDto,
   CarTypeDto,
+  FleetTimelineDetailQueryDto,
   FleetTimelineQueryDto,
   OfferDto,
   UpdateCarDto,
@@ -237,6 +238,160 @@ export class AdminFleetService {
           }),
         };
       }),
+    };
+  }
+
+  async fleetTimelineDetails(input: FleetTimelineDetailQueryDto) {
+    const offer = await this.offerRepo
+      .createQueryBuilder('o')
+      .select([
+        'o.id AS id',
+        'o.branch_id AS "branchId"',
+        't.brand AS brand',
+        't.model AS model',
+      ])
+      .innerJoin('car_type', 't', 't.id = o.car_type_id')
+      .where('o.id = :id', { id: input.carTypeBranchId })
+      .getRawOne<{
+        id: string;
+        branchId: string;
+        brand: string;
+        model: string;
+      }>();
+    if (!offer) throw new NotFoundException('Car offer not found');
+
+    const branch = await this.branchRepo.findOneBy({ id: offer.branchId });
+    if (!branch) throw new NotFoundException('Branch not found');
+    const dayStart = DateTime.fromFormat(input.date, 'yyyy-MM-dd', {
+      zone: branch.timezone,
+    }).startOf('day');
+    const branchNow = DateTime.utc().setZone(branch.timezone);
+    if (
+      !dayStart.isValid ||
+      dayStart.toISODate() !== input.date ||
+      !branchNow.isValid
+    ) {
+      throw new BadRequestException('Date must be a valid branch-local date');
+    }
+    if (input.date < branchNow.toISODate())
+      throw new BadRequestException('Past dates are not available');
+
+    const dayEnd = dayStart.plus({ days: 1 });
+    const dayInterval = {
+      startsAt: dayStart.toUTC().toISO(),
+      endsAt: dayEnd.toUTC().toISO(),
+    };
+    const now = DateTime.utc().toISO();
+    const vehicleCapacity = Number(
+      (
+        await this.carRepo
+          .createQueryBuilder('c')
+          .select('count(*)::int', 'count')
+          .where(
+            "c.car_type_branch_id = :id AND c.status = 'ACTIVE' AND c.is_active",
+            { id: offer.id },
+          )
+          .getRawOne<{ count: number }>()
+      )?.count ?? 0,
+    );
+    const vehicleRows = await this.carRepo.manager
+      .getRepository(Booking)
+      .createQueryBuilder('b')
+      .select([
+        'b.booking_number AS "bookingNumber"',
+        'b.status AS status',
+        'b.pickup_at AS "pickupAt"',
+        'b.return_at AS "returnAt"',
+        'b.actual_return_at AS "actualReturnAt"',
+        'b.ready_at AS "readyAt"',
+        'c.license_plate AS "licensePlate"',
+      ])
+      .leftJoin('car', 'c', 'c.id = b.car_id')
+      .where('b.car_type_branch_id = :id', { id: offer.id })
+      .andWhere("b.status IN ('PENDING','APPROVED','IN_USE','COMPLETED')")
+      .andWhere('b.pickup_at < :dayEnd', { dayEnd: dayInterval.endsAt })
+      .andWhere(
+        `COALESCE(
+          b.ready_at,
+          CASE
+            WHEN b.actual_return_at IS NOT NULL THEN b.actual_return_at + INTERVAL '1 hour'
+            ELSE GREATEST(b.return_at + INTERVAL '2 hours', CAST(:now AS timestamptz) + INTERVAL '2 hours')
+          END
+        ) > :dayStart`,
+        { now, dayStart: dayInterval.startsAt },
+      )
+      .orderBy('b.pickup_at', 'ASC')
+      .getRawMany<{
+        bookingNumber: string;
+        status: string;
+        pickupAt: Date;
+        returnAt: Date;
+        actualReturnAt: Date | null;
+        readyAt: Date | null;
+        licensePlate: string | null;
+      }>();
+    const vehicleReservations = vehicleRows.map((row) => ({
+      bookingNumber: row.bookingNumber,
+      status: row.status,
+      pickupAt: new Date(String(row.pickupAt)).toISOString(),
+      returnAt: new Date(String(row.returnAt)).toISOString(),
+      actualReturnAt: row.actualReturnAt
+        ? new Date(String(row.actualReturnAt)).toISOString()
+        : null,
+      licensePlate: row.licensePlate,
+      blockingUntil: calculateReadyAt({
+        returnAt: new Date(String(row.returnAt)).toISOString(),
+        actualReturnAt: row.actualReturnAt
+          ? new Date(String(row.actualReturnAt)).toISOString()
+          : null,
+        readyAt: row.readyAt
+          ? new Date(String(row.readyAt)).toISOString()
+          : null,
+        now,
+      }).readyAt,
+    }));
+    const vehicleAvailability = calculateAvailableQuantity({
+      requestedInterval: dayInterval,
+      capacity: vehicleCapacity,
+      reservedIntervals: vehicleReservations.map((row) => ({
+        startsAt: row.pickupAt,
+        endsAt: row.blockingUntil,
+        quantity: 1,
+      })),
+    });
+    const pendingVehicleAvailability = calculateAvailableQuantity({
+      requestedInterval: dayInterval,
+      capacity: vehicleCapacity,
+      reservedIntervals: vehicleReservations
+        .filter((row) => row.status === 'PENDING')
+        .map((row) => ({
+          startsAt: row.pickupAt,
+          endsAt: row.blockingUntil,
+          quantity: 1,
+        })),
+    });
+
+    return {
+      branch: { id: branch.id, name: branch.name, timezone: branch.timezone },
+      date: input.date,
+      vehicle: {
+        carTypeBranchId: offer.id,
+        brand: offer.brand,
+        model: offer.model,
+        totalCapacity: vehicleCapacity,
+        peakReserved: vehicleAvailability.peakReserved,
+        peakPending: pendingVehicleAvailability.peakReserved,
+        available: vehicleAvailability.availableQuantity,
+        bookings: vehicleReservations.map((row) => ({
+          bookingNumber: row.bookingNumber,
+          status: row.status,
+          pickupAt: row.pickupAt,
+          returnAt: row.returnAt,
+          actualReturnAt: row.actualReturnAt,
+          licensePlate: row.licensePlate,
+          blockingUntil: row.blockingUntil,
+        })),
+      },
     };
   }
 

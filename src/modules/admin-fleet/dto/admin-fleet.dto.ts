@@ -34,6 +34,15 @@ export class FleetTimelineQueryDto {
   month?: string;
 }
 
+export class FleetTimelineDetailQueryDto {
+  @IsUUID()
+  carTypeBranchId!: string;
+
+  @IsString()
+  @Matches(/^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/)
+  date!: string;
+}
+
 export class CarTypeDto {
   @IsString() @MinLength(1) @MaxLength(80) brand!: string;
   @IsString() @MinLength(1) @MaxLength(100) model!: string;

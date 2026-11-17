@@ -23,6 +23,25 @@ export class OptionIdParams {
   optionId!: string;
 }
 
+export class OptionTimelineQueryDto {
+  @IsUUID()
+  branchId!: string;
+
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d{4}-(0[1-9]|1[0-2])$/)
+  month?: string;
+}
+
+export class OptionTimelineDetailQueryDto {
+  @IsUUID()
+  optionId!: string;
+
+  @IsString()
+  @Matches(/^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/)
+  date!: string;
+}
+
 export class CreateOptionDto {
   @IsUUID()
   branchId!: string;

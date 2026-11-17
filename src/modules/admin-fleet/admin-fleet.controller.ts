@@ -16,6 +16,7 @@ import { UserRole } from '../auth/enums/user-role.enum';
 import {
   CarDto,
   CarTypeDto,
+  FleetTimelineDetailQueryDto,
   FleetTimelineQueryDto,
   IdParams,
   OfferDto,
@@ -33,6 +34,11 @@ export class AdminFleetController {
 
   @Get('branches') branches() {
     return this.fleet.branches();
+  }
+  @Get('timeline/details') timelineDetails(
+    @Query() query: FleetTimelineDetailQueryDto,
+  ) {
+    return this.fleet.fleetTimelineDetails(query);
   }
   @Get('timeline') fleetTimeline(@Query() query: FleetTimelineQueryDto) {
     return this.fleet.fleetTimeline(query);

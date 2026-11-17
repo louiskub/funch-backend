@@ -17,8 +17,8 @@ async function bootstrap() {
   app.enableShutdownHooks();
 
   const swaggerConfig = new DocumentBuilder()
-    .setTitle('FUNCH API')
-    .setDescription('Customer and admin endpoints for FUNCH car rental.')
+    .setTitle('Calrentar API')
+    .setDescription('Customer and admin endpoints for Calrentar car rental.')
     .setVersion('1.0')
     .addCookieAuth(SESSION_COOKIE)
     .build();

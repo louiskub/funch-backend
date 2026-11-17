@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { Roles } from '../auth/decorators/auth.decorators';
@@ -15,6 +16,8 @@ import { UserRole } from '../auth/enums/user-role.enum';
 import {
   BranchOptionParams,
   CreateOptionDto,
+  OptionTimelineDetailQueryDto,
+  OptionTimelineQueryDto,
   OptionIdParams,
   UpdateOptionDto,
 } from './dto/options.dto';
@@ -41,6 +44,20 @@ export class OptionsController {
   @Roles(UserRole.ADMIN)
   adminOptions(@Param() { branchId }: BranchOptionParams) {
     return this.options.adminForBranch(branchId);
+  }
+
+  @Get('admin/options/timeline')
+  @UseGuards(SessionAuthGuard, RoleGuard)
+  @Roles(UserRole.ADMIN)
+  timeline(@Query() query: OptionTimelineQueryDto) {
+    return this.options.timeline(query);
+  }
+
+  @Get('admin/options/timeline/details')
+  @UseGuards(SessionAuthGuard, RoleGuard)
+  @Roles(UserRole.ADMIN)
+  timelineDetails(@Query() query: OptionTimelineDetailQueryDto) {
+    return this.options.timelineDetails(query);
   }
 
   @Post('admin/options')

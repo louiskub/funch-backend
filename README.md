@@ -1,4 +1,4 @@
-# FUNCH backend
+# Calrentar backend
 
 NestJS API backed by PostgreSQL and MinIO. Use Node.js 24 or newer (`--env-file-if-exists` is used by the scripts). Install dependencies and start the local database from this directory:
 
@@ -34,7 +34,7 @@ No Currency CRUD API or UI is included. Schema migrations are temporarily remove
 
 ## HTTP bootstrap and API documentation
 
-The API keeps the `/api` prefix. Swagger UI is available at `/docs`, with the OpenAPI document at `/docs/json`. The document uses the title `FUNCH API` and describes session-cookie authentication through `funch_session`. The Swagger compiler plugin derives request schemas from the DTOs. JSON is served over HTTP without writing a file at startup.
+The API keeps the `/api` prefix. Swagger UI is available at `/docs`, with the OpenAPI document at `/docs/json`. The document uses the title `Calrentar API` and describes session-cookie authentication through `funch_session`. The Swagger compiler plugin derives request schemas from the DTOs. JSON is served over HTTP without writing a file at startup.
 
 Helmet sets the HTTP security headers. CORS allows the configured `FRONTEND_ORIGIN` with credentials. Swagger uses an existing browser session; its authorization control cannot set an HttpOnly cookie.
 

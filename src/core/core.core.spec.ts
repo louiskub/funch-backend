@@ -667,11 +667,13 @@ describe('canCancelBooking (BL-07)', () => {
     'allows customer cancellation of %s at the permitted time',
     (status) => {
       const now =
-        status === 'PENDING'
-          ? '2026-11-16T10:00:01+07:00'
-          : input.now;
+        status === 'PENDING' ? '2026-11-16T10:00:01+07:00' : input.now;
       expect(
-        canCancelBooking({ ...input, now, booking: { ...input.booking, status } }),
+        canCancelBooking({
+          ...input,
+          now,
+          booking: { ...input.booking, status },
+        }),
       ).toEqual({ allowed: true, reason: null });
     },
   );

@@ -170,8 +170,8 @@ export class OptionsService {
           days: Array.from({ length: monthStart.daysInMonth }, (_, index) => {
             const dayStart = monthStart.plus({ days: index }).startOf('day');
             const requestedInterval = {
-              startsAt: dayStart.toUTC().toISO()!,
-              endsAt: dayStart.plus({ days: 1 }).toUTC().toISO()!,
+              startsAt: dayStart.toUTC().toISO(),
+              endsAt: dayStart.plus({ days: 1 }).toUTC().toISO(),
             };
             const availability = calculateAvailableQuantity({
               requestedInterval,
@@ -229,8 +229,8 @@ export class OptionsService {
     if (input.date < branchNow.toISODate())
       throw new BadRequestException('Past dates are not available');
     const dayInterval = {
-      startsAt: dayStart.toUTC().toISO()!,
-      endsAt: dayStart.plus({ days: 1 }).toUTC().toISO()!,
+      startsAt: dayStart.toUTC().toISO(),
+      endsAt: dayStart.plus({ days: 1 }).toUTC().toISO(),
     };
     const rows = await this.bookingOptionRepo
       .createQueryBuilder('bo')
@@ -260,7 +260,9 @@ export class OptionsService {
       }>();
     const intervals = rows.map((row) => ({
       startsAt: new Date(String(row.pickupAt)).toISOString(),
-      endsAt: new Date(String(row.actualReturnAt ?? row.returnAt)).toISOString(),
+      endsAt: new Date(
+        String(row.actualReturnAt ?? row.returnAt),
+      ).toISOString(),
       quantity: Number(row.quantity),
     }));
     const availability = calculateAvailableQuantity({
@@ -271,7 +273,9 @@ export class OptionsService {
     const pending = calculateAvailableQuantity({
       requestedInterval: dayInterval,
       capacity: option.quantityStock,
-      reservedIntervals: intervals.filter((_, index) => rows[index].status === 'PENDING'),
+      reservedIntervals: intervals.filter(
+        (_, index) => rows[index].status === 'PENDING',
+      ),
     }).peakReserved;
     return {
       branch: { id: branch.id, name: branch.name, timezone: branch.timezone },

@@ -21,6 +21,8 @@ import { SESSION_COOKIE } from '../auth/constants/session.constants';
 import {
   CheckoutInput,
   QuoteInput,
+  BookingEditQuoteInput,
+  ConfirmBookingEditInput,
   ReasonInput,
   PickupInput,
   AddChargeInput,
@@ -82,6 +84,26 @@ export class BookingsController {
     @Req() request: AuthenticatedRequest,
   ) {
     return this.bookings.get(id, request.authUser!);
+  }
+
+  @Post('bookings/:id/edit-quote')
+  @UseGuards(SessionAuthGuard)
+  editQuote(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() input: BookingEditQuoteInput,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.bookings.previewEdit(id, input, request.authUser!);
+  }
+
+  @Post('bookings/:id/edit')
+  @UseGuards(SessionAuthGuard)
+  edit(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() input: ConfirmBookingEditInput,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.bookings.confirmEdit(id, input, request.authUser!);
   }
 
   @Post('bookings/:id/cancel')

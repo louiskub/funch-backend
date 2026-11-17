@@ -11,6 +11,7 @@ import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { DataSource, EntityManager, Repository } from 'typeorm';
 import {
   calculateAvailableQuantity,
+  calculateBookingEditAmounts,
   calculateBookingTotal,
   calculateLateReturnCharges,
   calculateOptionPrice,
@@ -32,12 +33,19 @@ import { Branch } from '../catalog/entities/branch.entity';
 import { CarOption } from '../options/entities/car-option.entity';
 import { AdditionalCharge } from './entities/additional-charge.entity';
 import { BookingOption } from './entities/booking-option.entity';
+import {
+  BookingRevision,
+  type BookingRevisionOptionState,
+  type BookingRevisionState,
+} from './entities/booking-revision.entity';
 import { Booking } from './entities/booking.entity';
 import { AdditionalChargeType } from './enums/additional-charge-type.enum';
 import { BookingStatus } from './enums/booking-status.enum';
 import type {
   CheckoutInput,
   QuoteInput,
+  BookingEditQuoteInput,
+  ConfirmBookingEditInput,
   AddChargeInput,
   ReportFilterInput,
 } from './dto/booking.dto';
@@ -45,10 +53,38 @@ import { PasswordService } from '../auth/services/password.service';
 
 type PriceRow = {
   id: string;
+  name: string;
   pricingType: 'FIXED' | 'PER_DAY' | 'PER_UNIT_PER_DAY';
   quantityStock: number | null;
   price: string;
   currency: string;
+};
+type QuoteContext = {
+  excludeBookingId?: string;
+};
+type EditableBookingRow = {
+  id: string;
+  bookingNumber: string;
+  userId: string;
+  carTypeBranchId: string;
+  status: BookingStatus;
+  pickupAt: string | Date;
+  returnAt: string | Date;
+  currencyCode: string;
+  dailyRateAtBooking: string;
+  hourlyRateAtBooking: string;
+  chargedDays: number;
+  chargedHours: number;
+  rentalSubtotal: string;
+  optionsSubtotal: string;
+  totalAmount: string;
+  paidAmount: string;
+  approvedBy: string | null;
+  approvedAt: string | Date | null;
+};
+type ExistingBookingOptionRow = BookingRevisionOptionState & {
+  id: string;
+  isActive: boolean;
 };
 type QuoteResult = {
   offerId: string;
@@ -73,6 +109,7 @@ type QuoteResult = {
   }>;
   options: Array<{
     carOptionId: string;
+    name: string;
     quantity: number;
     unitPrice: string;
     chargedUnits: number;
@@ -99,6 +136,8 @@ export class BookingsService {
     private readonly bookingRepo: Repository<Booking>,
     @InjectRepository(BookingOption)
     private readonly bookingOptionRepo: Repository<BookingOption>,
+    @InjectRepository(BookingRevision)
+    private readonly bookingRevisionRepo: Repository<BookingRevision>,
     @InjectRepository(AdditionalCharge)
     private readonly additionalChargeRepo: Repository<AdditionalCharge>,
     @InjectRepository(CarTypeBranch)
@@ -120,6 +159,14 @@ export class BookingsService {
   async quote(
     input: QuoteInput,
     manager: EntityManager = this.db.manager,
+  ): Promise<QuoteResult> {
+    return this.quoteWithContext(input, manager, {});
+  }
+
+  private async quoteWithContext(
+    input: QuoteInput,
+    manager: EntityManager,
+    context: QuoteContext,
   ): Promise<QuoteResult> {
     const pickupAt = instant(input.pickupAt);
     const returnAt = instant(input.returnAt);
@@ -172,6 +219,7 @@ export class BookingsService {
           .createQueryBuilder('co')
           .select([
             'co.id AS id',
+            'co.name AS name',
             'co.pricing_type AS "pricingType"',
             'co.quantity_stock AS "quantityStock"',
             'co.price::text AS price',
@@ -215,31 +263,34 @@ export class BookingsService {
     const stockTrackedIds = optionRows
       .filter((option) => option.quantityStock !== null)
       .map((option) => option.id);
-    const reservations = stockTrackedIds.length
-      ? await (
-          manager
-            ? manager.getRepository(BookingOption)
-            : this.bookingOptionRepo
-        )
-          .createQueryBuilder('bo')
-          .select([
-            'bo.car_option_id AS "carOptionId"',
-            'bo.quantity AS quantity',
-            'b.pickup_at AS "pickupAt"',
-            'COALESCE(b.actual_return_at, b.return_at) AS "returnAt"',
-          ])
-          .innerJoin('booking', 'b', 'b.id = bo.booking_id')
-          .where(
-            "bo.car_option_id IN (:...optionIds) AND b.status IN ('PENDING','APPROVED','IN_USE')",
-            { optionIds: stockTrackedIds },
-          )
-          .getRawMany<{
-            carOptionId: string;
-            quantity: number;
-            pickupAt: string | Date;
-            returnAt: string | Date;
-          }>()
-      : [];
+    let reservations: Array<{
+      carOptionId: string;
+      quantity: number;
+      pickupAt: string | Date;
+      returnAt: string | Date;
+    }> = [];
+    if (stockTrackedIds.length) {
+      const reservationsQuery = (
+        manager ? manager.getRepository(BookingOption) : this.bookingOptionRepo
+      )
+        .createQueryBuilder('bo')
+        .select([
+          'bo.car_option_id AS "carOptionId"',
+          'bo.quantity AS quantity',
+          'b.pickup_at AS "pickupAt"',
+          'COALESCE(b.actual_return_at, b.return_at) AS "returnAt"',
+        ])
+        .innerJoin('booking', 'b', 'b.id = bo.booking_id')
+        .where(
+          "bo.car_option_id IN (:...optionIds) AND b.status IN ('PENDING','APPROVED','IN_USE')",
+          { optionIds: stockTrackedIds },
+        );
+      if (context.excludeBookingId)
+        reservationsQuery.andWhere('b.id <> :excludeBookingId', {
+          excludeBookingId: context.excludeBookingId,
+        });
+      reservations = await reservationsQuery.getRawMany();
+    }
     const reservationsByOption = new Map<string, typeof reservations>();
     for (const reservation of reservations) {
       const rows = reservationsByOption.get(reservation.carOptionId) ?? [];
@@ -281,6 +332,7 @@ export class BookingsService {
       });
       lines.push({
         carOptionId: optionId,
+        name: option.name,
         quantity: item.quantity,
         unitPrice: option.price,
         chargedUnits: price.chargedUnits,
@@ -312,7 +364,11 @@ export class BookingsService {
         endsAt: calculateReadyAt({ returnAt, actualReturnAt: null }).readyAt,
       },
       capacity: vehicleCapacity,
-      reservedIntervals: await this.reserved(manager, String(offer.id)),
+      reservedIntervals: await this.reserved(
+        manager,
+        String(offer.id),
+        context.excludeBookingId,
+      ),
     });
     return {
       offerId: offer.id,
@@ -330,6 +386,398 @@ export class BookingsService {
       availableVehicles: vehicleAvailability.availableQuantity,
       optionAvailability,
       options: lines,
+    };
+  }
+
+  async previewEdit(id: string, input: BookingEditQuoteInput, actor: AuthUser) {
+    const booking = await this.findEditableBooking(
+      this.bookingRepo,
+      id,
+      actor,
+      false,
+    );
+    const existingOptions = await this.loadBookingEditOptions(
+      this.db.manager,
+      id,
+    );
+    const options = this.removeInactiveBookingOptions(
+      input.options,
+      existingOptions,
+    );
+    const removedOptions = existingOptions
+      .filter((option) => !option.isActive)
+      .map(({ carOptionId, name }) => ({ carOptionId, name }));
+    const revisionNumber = await this.currentRevisionNumber(
+      this.db.manager,
+      id,
+    );
+    const quote = await this.quoteWithContext(
+      {
+        offerId: booking.carTypeBranchId,
+        pickupAt: input.pickupAt,
+        returnAt: input.returnAt,
+        options,
+      },
+      this.db.manager,
+      { excludeBookingId: id },
+    );
+    const amounts = calculateBookingEditAmounts({
+      currentTotal: booking.totalAmount,
+      paidAmount: booking.paidAmount,
+      nextTotal: quote.totalAmount,
+    });
+    return {
+      bookingId: id,
+      bookingNumber: booking.bookingNumber,
+      status: booking.status,
+      revisionNumber,
+      currentTotalAmount: booking.totalAmount,
+      paidAmount: booking.paidAmount,
+      removedOptions,
+      ...quote,
+      ...amounts,
+    };
+  }
+
+  async confirmEdit(
+    id: string,
+    input: ConfirmBookingEditInput,
+    actor: AuthUser,
+  ) {
+    if (actor.role !== UserRole.CUSTOMER)
+      throw new ForbiddenException('Only customers can edit bookings');
+    return this.db.transaction(async (manager) => {
+      const bookingRepo = manager.getRepository(Booking);
+      const revisionRepo = manager.getRepository(BookingRevision);
+      const bookingOptionRepo = manager.getRepository(BookingOption);
+      const offerRepo = manager.getRepository(CarTypeBranch);
+      const booking = await this.findEditableBooking(
+        bookingRepo,
+        id,
+        actor,
+        true,
+      );
+      const revisionNumber = await this.currentRevisionNumber(manager, id);
+      if (input.expectedRevisionNumber !== revisionNumber)
+        throw new ConflictException('BOOKING_CHANGED');
+
+      await offerRepo
+        .createQueryBuilder('o')
+        .select('o.id')
+        .where('o.id = :id', { id: booking.carTypeBranchId })
+        .setLock('pessimistic_write')
+        .getRawOne();
+
+      const existingOptions = await this.loadBookingEditOptions(manager, id);
+      const existingByOption = new Map(
+        existingOptions.map((option) => [option.carOptionId, option]),
+      );
+      const options = this.removeInactiveBookingOptions(
+        input.options,
+        existingOptions,
+      );
+      const optionIds: string[] = [];
+      for (const option of options) optionIds.push(option.carOptionId);
+      await this.lockOptions(manager, optionIds);
+
+      const quote = await this.quoteWithContext(
+        {
+          offerId: booking.carTypeBranchId,
+          pickupAt: input.pickupAt,
+          returnAt: input.returnAt,
+          options,
+        },
+        manager,
+        { excludeBookingId: id },
+      );
+      const quotedOptions = quote.options
+        .map(({ carOptionId, quantity }) => ({ carOptionId, quantity }))
+        .sort((a, b) => a.carOptionId.localeCompare(b.carOptionId));
+      const expectedOptions = [...input.expectedOptions].sort((a, b) =>
+        a.carOptionId.localeCompare(b.carOptionId),
+      );
+      if (
+        quotedOptions.length !== expectedOptions.length ||
+        quotedOptions.some(
+          (option, index) =>
+            option.carOptionId !== expectedOptions[index].carOptionId ||
+            option.quantity !== expectedOptions[index].quantity,
+        )
+      )
+        throw new ConflictException('QUOTE_CHANGED');
+      if (compareDecimals(quote.totalAmount, input.expectedTotalAmount) !== 0)
+        throw new ConflictException('PRICE_CHANGED');
+      if (quote.availableVehicles < 1)
+        throw new ConflictException('AVAILABILITY_CHANGED');
+      if (
+        quote.options.some(
+          (option) =>
+            option.availableQuantity !== null &&
+            option.availableQuantity < option.quantity,
+        )
+      )
+        throw new ConflictException('AVAILABILITY_CHANGED');
+
+      const amounts = calculateBookingEditAmounts({
+        currentTotal: booking.totalAmount,
+        paidAmount: booking.paidAmount,
+        nextTotal: quote.totalAmount,
+      });
+      const beforeState = this.bookingRevisionState(booking, existingOptions);
+      const nextStatus = BookingStatus.PENDING;
+      const nextBooking: EditableBookingRow = {
+        ...booking,
+        status: nextStatus,
+        pickupAt: new Date(quote.pickupAt),
+        returnAt: new Date(quote.returnAt),
+        dailyRateAtBooking: quote.dailyRateAtBooking,
+        hourlyRateAtBooking: quote.hourlyRateAtBooking,
+        chargedDays: quote.chargedDays,
+        chargedHours: quote.chargedHours,
+        rentalSubtotal: quote.rentalSubtotal,
+        optionsSubtotal: quote.optionsSubtotal,
+        totalAmount: quote.totalAmount,
+        paidAmount: amounts.nextPaidAmount,
+        approvedBy: null,
+        approvedAt: null,
+      };
+      const afterState = this.bookingRevisionState(
+        nextBooking,
+        quote.options.map((option) => ({
+          carOptionId: option.carOptionId,
+          name: option.name,
+          quantity: option.quantity,
+          unitPriceAtBooking: option.unitPrice,
+          chargedUnits: option.chargedUnits,
+          totalAmount: option.totalAmount,
+        })),
+      );
+
+      await bookingRepo.update(
+        { id },
+        {
+          pickupAt: nextBooking.pickupAt,
+          returnAt: nextBooking.returnAt,
+          status: nextStatus,
+          currencyCode: quote.currencyCode,
+          dailyRateAtBooking: quote.dailyRateAtBooking,
+          hourlyRateAtBooking: quote.hourlyRateAtBooking,
+          chargedDays: quote.chargedDays,
+          chargedHours: quote.chargedHours,
+          rentalSubtotal: quote.rentalSubtotal,
+          optionsSubtotal: quote.optionsSubtotal,
+          totalAmount: quote.totalAmount,
+          paidAmount: amounts.nextPaidAmount,
+          approvedBy: null,
+          approvedAt: null,
+          updatedAt: () => 'now()',
+        },
+      );
+
+      const retainedOptionIds = new Set(
+        quote.options.map(({ carOptionId }) => carOptionId),
+      );
+      for (const option of quote.options) {
+        const existing = existingByOption.get(option.carOptionId);
+        const values = {
+          quantity: option.quantity,
+          unitPriceAtBooking: option.unitPrice,
+          chargedUnits: option.chargedUnits,
+          totalAmount: option.totalAmount,
+        };
+        if (existing) await bookingOptionRepo.update(existing.id, values);
+        else
+          await bookingOptionRepo.insert({
+            id: randomUUID(),
+            bookingId: id,
+            carOptionId: option.carOptionId,
+            ...values,
+          });
+      }
+      const removedOptionIds = existingOptions
+        .filter((option) => !retainedOptionIds.has(option.carOptionId))
+        .map(({ id: optionId }) => optionId);
+      if (removedOptionIds.length)
+        await bookingOptionRepo.delete(removedOptionIds);
+
+      const nextRevisionNumber = revisionNumber + 1;
+      const revision = {
+        id: randomUUID(),
+        bookingId: id,
+        revisionNumber: nextRevisionNumber,
+        changedBy: actor.id,
+        beforeState,
+        afterState,
+        amountDelta: amounts.amountDelta,
+        createdAt: new Date(),
+      };
+      await revisionRepo.insert(revision);
+      return {
+        id,
+        bookingNumber: booking.bookingNumber,
+        status: nextStatus,
+        revisionNumber: nextRevisionNumber,
+        totalAmount: quote.totalAmount,
+        paidAmount: amounts.nextPaidAmount,
+        currencyCode: quote.currencyCode,
+        ...amounts,
+      };
+    });
+  }
+
+  private async findEditableBooking(
+    repository: Repository<Booking>,
+    id: string,
+    actor: AuthUser,
+    lock: boolean,
+  ): Promise<EditableBookingRow> {
+    if (actor.role !== UserRole.CUSTOMER)
+      throw new ForbiddenException('Only customers can edit bookings');
+    const query = repository
+      .createQueryBuilder('b')
+      .select([
+        'b.id AS id',
+        'b.booking_number AS "bookingNumber"',
+        'b.user_id AS "userId"',
+        'b.car_type_branch_id AS "carTypeBranchId"',
+        'b.status AS status',
+        'b.pickup_at AS "pickupAt"',
+        'b.return_at AS "returnAt"',
+        'b.currency_code AS "currencyCode"',
+        'b.daily_rate_at_booking::text AS "dailyRateAtBooking"',
+        'b.hourly_rate_at_booking::text AS "hourlyRateAtBooking"',
+        'b.charged_days AS "chargedDays"',
+        'b.charged_hours AS "chargedHours"',
+        'b.rental_subtotal::text AS "rentalSubtotal"',
+        'b.options_subtotal::text AS "optionsSubtotal"',
+        'b.total_amount::text AS "totalAmount"',
+        'b.paid_amount::text AS "paidAmount"',
+        'b.approved_by AS "approvedBy"',
+        'b.approved_at AS "approvedAt"',
+      ])
+      .where('b.id = :id', { id });
+    if (lock) query.setLock('pessimistic_write');
+    const booking = await query.getRawOne<EditableBookingRow>();
+    if (!booking) throw new NotFoundException('Booking not found');
+    if (booking.userId !== actor.id) throw new ForbiddenException();
+    if (
+      booking.status !== BookingStatus.PENDING &&
+      booking.status !== BookingStatus.APPROVED
+    )
+      throw new ConflictException('BOOKING_CANNOT_BE_EDITED');
+    if (
+      Date.parse(new Date(String(booking.pickupAt)).toISOString()) <= Date.now()
+    )
+      throw new ConflictException('BOOKING_CANNOT_BE_EDITED');
+    return booking;
+  }
+
+  private async loadBookingEditOptions(
+    manager: EntityManager,
+    bookingId: string,
+  ): Promise<ExistingBookingOptionRow[]> {
+    return manager
+      .getRepository(BookingOption)
+      .createQueryBuilder('bo')
+      .select([
+        'bo.id AS id',
+        'bo.car_option_id AS "carOptionId"',
+        'co.name AS name',
+        'bo.quantity AS quantity',
+        'bo.unit_price_at_booking::text AS "unitPriceAtBooking"',
+        'bo.charged_units AS "chargedUnits"',
+        'bo.total_amount::text AS "totalAmount"',
+        'co.is_active AS "isActive"',
+      ])
+      .innerJoin('car_option', 'co', 'co.id = bo.car_option_id')
+      .where('bo.booking_id = :bookingId', { bookingId })
+      .orderBy('bo.car_option_id', 'ASC')
+      .getRawMany<ExistingBookingOptionRow>();
+  }
+
+  private removeInactiveBookingOptions(
+    requestedOptions: BookingEditQuoteInput['options'],
+    existingOptions: ExistingBookingOptionRow[],
+  ): BookingEditQuoteInput['options'] {
+    const inactiveIds = new Set(
+      existingOptions
+        .filter((option) => !option.isActive)
+        .map((option) => option.carOptionId),
+    );
+    return requestedOptions.filter(
+      ({ carOptionId }) => !inactiveIds.has(carOptionId),
+    );
+  }
+
+  private async currentRevisionNumber(
+    manager: EntityManager,
+    bookingId: string,
+  ): Promise<number> {
+    const row = await manager
+      .getRepository(BookingRevision)
+      .createQueryBuilder('r')
+      .select('COALESCE(MAX(r.revision_number), 0)', 'revisionNumber')
+      .where('r.booking_id = :bookingId', { bookingId })
+      .getRawOne<{ revisionNumber: string | number }>();
+    return Number(row?.revisionNumber ?? 0);
+  }
+
+  private async lockOptions(
+    manager: EntityManager,
+    optionIds: string[],
+  ): Promise<void> {
+    const ids = [...new Set(optionIds)].sort();
+    if (!ids.length) return;
+    await manager
+      .getRepository(CarOption)
+      .createQueryBuilder('co')
+      .select('co.id')
+      .where('co.id IN (:...ids)', { ids })
+      .orderBy('co.id', 'ASC')
+      .setLock('pessimistic_write')
+      .getRawMany();
+  }
+
+  private bookingRevisionState(
+    booking: EditableBookingRow,
+    options: BookingRevisionOptionState[],
+  ): BookingRevisionState {
+    const instantValue = (value: string | Date | null) =>
+      value ? new Date(String(value)).toISOString() : null;
+    return {
+      status: booking.status,
+      pickupAt: new Date(String(booking.pickupAt)).toISOString(),
+      returnAt: new Date(String(booking.returnAt)).toISOString(),
+      currencyCode: booking.currencyCode,
+      dailyRateAtBooking: booking.dailyRateAtBooking,
+      hourlyRateAtBooking: booking.hourlyRateAtBooking,
+      chargedDays: booking.chargedDays,
+      chargedHours: booking.chargedHours,
+      rentalSubtotal: booking.rentalSubtotal,
+      optionsSubtotal: booking.optionsSubtotal,
+      totalAmount: booking.totalAmount,
+      paidAmount: booking.paidAmount,
+      approvedBy: booking.approvedBy,
+      approvedAt: instantValue(booking.approvedAt),
+      options: options
+        .map(
+          ({
+            carOptionId,
+            name,
+            quantity,
+            unitPriceAtBooking,
+            chargedUnits,
+            totalAmount,
+          }) => ({
+            carOptionId,
+            name,
+            quantity,
+            unitPriceAtBooking,
+            chargedUnits,
+            totalAmount,
+          }),
+        )
+        .sort((a, b) => a.carOptionId.localeCompare(b.carOptionId)),
     };
   }
 
@@ -357,6 +805,7 @@ export class BookingsService {
           'b.booking_number AS "bookingNumber"',
           'b.status AS status',
           'b.total_amount::text AS "totalAmount"',
+          'b.paid_amount::text AS "paidAmount"',
           'b.currency_code AS "currencyCode"',
           'b.user_id AS "userId"',
         ])
@@ -454,6 +903,10 @@ export class BookingsService {
         .where('o.id = :offerId', { offerId: input.offerId })
         .setLock('pessimistic_write')
         .getRawOne();
+      await this.lockOptions(
+        manager,
+        input.options.map(({ carOptionId }) => carOptionId),
+      );
       const quote = await this.quote(input, manager);
       if (quote.availableVehicles < 1)
         throw new ConflictException('AVAILABILITY_CHANGED');
@@ -490,6 +943,7 @@ export class BookingsService {
         rentalSubtotal: quote.rentalSubtotal,
         optionsSubtotal: quote.optionsSubtotal,
         totalAmount: quote.totalAmount,
+        paidAmount: quote.totalAmount,
       });
       for (const line of quote.options)
         await bookingOptionRepo.insert({
@@ -506,6 +960,7 @@ export class BookingsService {
         bookingNumber,
         status: 'PENDING',
         totalAmount: quote.totalAmount,
+        paidAmount: quote.totalAmount,
         currencyCode: quote.currencyCode,
       };
     });
@@ -531,10 +986,12 @@ export class BookingsService {
         'b.pickup_at AS "pickupAt"',
         'b.return_at AS "returnAt"',
         'b.total_amount::text AS "totalAmount"',
+        'b.paid_amount::text AS "paidAmount"',
         'b.currency_code AS "currencyCode"',
         't.brand AS brand',
         't.model AS model',
         'br.name AS "branchName"',
+        'br.timezone AS timezone',
         'c.license_plate AS "licensePlate"',
       ])
       .innerJoin('car_type_branch', 'o', 'o.id = b.car_type_branch_id')
@@ -562,6 +1019,7 @@ export class BookingsService {
         'b.booking_number AS "bookingNumber"',
         'b.user_id AS "userId"',
         'b.car_type_branch_id AS "carTypeBranchId"',
+        'b.pickup_branch_id AS "pickupBranchId"',
         'b.car_id AS "carId"',
         'b.pickup_at AS "pickupAt"',
         'b.return_at AS "returnAt"',
@@ -576,12 +1034,14 @@ export class BookingsService {
         'b.rental_subtotal::text AS "rentalSubtotal"',
         'b.options_subtotal::text AS "optionsSubtotal"',
         'b.total_amount::text AS "totalAmount"',
+        'b.paid_amount::text AS "paidAmount"',
         'b.rejection_reason AS "rejectionReason"',
         'b.cancellation_reason AS "cancellationReason"',
         'b.created_at AS "createdAt"',
         't.brand AS brand',
         't.model AS model',
         'br.name AS "branchName"',
+        'br.timezone AS timezone',
         'c.license_plate AS "licensePlate"',
         'c.vin AS "carVin"',
         'c.year AS "carYear"',
@@ -605,6 +1065,9 @@ export class BookingsService {
         'bo.unit_price_at_booking::text AS "unitPriceAtBooking"',
         'bo.charged_units AS "chargedUnits"',
         'bo.total_amount::text AS "totalAmount"',
+        'co.is_active AS "isActive"',
+        'co.pricing_type AS "pricingType"',
+        'co.quantity_stock AS "quantityStock"',
       ])
       .innerJoin('car_option', 'co', 'co.id = bo.car_option_id')
       .where('bo.booking_id = :id', { id })
@@ -625,6 +1088,25 @@ export class BookingsService {
       .where('a.booking_id = :id', { id })
       .orderBy('a.created_at')
       .getRawMany();
+    booking.revisions =
+      actor.role === UserRole.ADMIN
+        ? await this.bookingRevisionRepo
+            .createQueryBuilder('r')
+            .select([
+              'r.id AS id',
+              'r.revision_number AS "revisionNumber"',
+              'r.changed_by AS "changedBy"',
+              'u.name AS "changedByName"',
+              'r.before_state AS "beforeState"',
+              'r.after_state AS "afterState"',
+              'r.amount_delta::text AS "amountDelta"',
+              'r.created_at AS "createdAt"',
+            ])
+            .leftJoin('app_user', 'u', 'u.id = r.changed_by')
+            .where('r.booking_id = :id', { id })
+            .orderBy('r.revision_number', 'ASC')
+            .getRawMany()
+        : [];
     booking.finalAmount = await this.finalAmount(this.db.manager, id);
     return booking;
   }

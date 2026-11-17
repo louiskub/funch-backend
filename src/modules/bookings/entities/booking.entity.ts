@@ -5,6 +5,7 @@ import { Currency } from '../../catalog/entities/currency.entity';
 
 @Entity({ name: 'booking' })
 @Check('booking_interval_check', 'return_at > pickup_at')
+@Check('booking_paid_amount_check', 'paid_amount >= 0')
 @Index('booking_user_created_idx', ['userId', 'createdAt'])
 @Index('booking_capacity_idx', [
   'carTypeBranchId',
@@ -68,6 +69,8 @@ export class Booking extends BaseEntity {
   optionsSubtotal!: string;
   @Column({ name: 'total_amount', type: 'numeric', precision: 14, scale: 4 })
   totalAmount!: string;
+  @Column({ name: 'paid_amount', type: 'numeric', precision: 14, scale: 4 })
+  paidAmount!: string;
   @Column({ name: 'approved_by', type: 'uuid', nullable: true }) approvedBy!:
     string | null;
   @Column({ name: 'approved_at', type: 'timestamptz', nullable: true })

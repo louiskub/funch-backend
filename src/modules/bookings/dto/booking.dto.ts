@@ -39,6 +39,29 @@ export class QuoteInput {
   availabilityOptionIds?: string[];
 }
 
+export class BookingEditQuoteInput {
+  @IsString() pickupAt!: string;
+  @IsString() returnAt!: string;
+  @IsArray()
+  @ArrayMaxSize(30)
+  @ValidateNested({ each: true })
+  @Type(() => BookingOptionInput)
+  options!: BookingOptionInput[];
+}
+
+export class ConfirmBookingEditInput extends BookingEditQuoteInput {
+  @IsInt() @Min(0) expectedRevisionNumber!: number;
+  @IsString()
+  @MaxLength(32)
+  @Matches(/^(?:0|[1-9]\d*)(?:\.\d+)?$/)
+  expectedTotalAmount!: string;
+  @IsArray()
+  @ArrayMaxSize(30)
+  @ValidateNested({ each: true })
+  @Type(() => BookingOptionInput)
+  expectedOptions!: BookingOptionInput[];
+}
+
 export class CheckoutInput extends QuoteInput {
   @IsUUID() checkoutKey!: string;
   @IsOptional()

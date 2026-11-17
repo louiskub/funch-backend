@@ -10,6 +10,7 @@ import { Branch } from '../catalog/entities/branch.entity';
 import { CarOption } from '../options/entities/car-option.entity';
 import { AdditionalCharge } from './entities/additional-charge.entity';
 import { BookingOption } from './entities/booking-option.entity';
+import { BookingRevision } from './entities/booking-revision.entity';
 import { Booking } from './entities/booking.entity';
 import { BookingsController } from './bookings.controller';
 import { BookingsService } from './bookings.service';
@@ -21,6 +22,7 @@ import { BookingsService } from './bookings.service';
     TypeOrmModule.forFeature([
       Booking,
       BookingOption,
+      BookingRevision,
       AdditionalCharge,
       CarTypeBranch,
       CarOption,

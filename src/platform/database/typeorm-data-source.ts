@@ -7,6 +7,7 @@ import { AppUser } from '../../modules/auth/entities/app-user.entity';
 import { UserSession } from '../../modules/auth/entities/user-session.entity';
 import { Booking } from '../../modules/bookings/entities/booking.entity';
 import { BookingOption } from '../../modules/bookings/entities/booking-option.entity';
+import { BookingRevision } from '../../modules/bookings/entities/booking-revision.entity';
 import { AdditionalCharge } from '../../modules/bookings/entities/additional-charge.entity';
 import { Branch } from '../../modules/catalog/entities/branch.entity';
 import { Country } from '../../modules/catalog/entities/country.entity';
@@ -38,6 +39,7 @@ export function createAppDataSource() {
       FileAsset,
       Booking,
       BookingOption,
+      BookingRevision,
       AdditionalCharge,
     ],
     migrations: [path.join(__dirname, 'migrations/*{.ts,.js}')],

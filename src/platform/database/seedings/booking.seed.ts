@@ -119,6 +119,7 @@ export async function seedBookings(manager: EntityManager): Promise<void> {
       rentalSubtotal: total.rentalSubtotal.amount,
       optionsSubtotal: total.optionsSubtotal.amount,
       totalAmount: total.totalAmount.amount,
+      paidAmount: total.totalAmount.amount,
       approvedBy:
         fixture.status === BookingStatus.APPROVED ||
         fixture.status === BookingStatus.IN_USE ||

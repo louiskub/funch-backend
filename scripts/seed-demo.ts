@@ -5,6 +5,7 @@ import { PasswordService } from '../src/modules/auth/services/password.service';
 import { StorageService } from '../src/platform/storage/storage.service';
 import { createAppDataSource } from '../src/platform/database/typeorm-data-source';
 import { seedMain } from '../src/platform/database/seedings/main.seeding';
+import { BookingStatus } from '../src/modules/bookings/enums/booking-status.enum';
 import {
   calculateBookingTotal,
   calculateOptionPrice,
@@ -91,8 +92,7 @@ const DEMO_IMAGES = [
   },
 ];
 type DemoBookingFixture = {
-  status:
-    'PENDING' | 'APPROVED' | 'IN_USE' | 'COMPLETED' | 'CANCELLED' | 'REJECTED';
+  status: BookingStatus;
   customer: number;
   offer: string;
   car: string | null;
@@ -103,6 +103,7 @@ type DemoBookingFixture = {
   actual?: number;
   reason?: string;
   charges?: DemoBookingCharge[];
+  revision?: { beforePickup: number; beforeReturn: number };
 };
 type DemoBookingCharge = {
   type: 'DAMAGE' | 'EXTRA_RENTAL';
@@ -111,7 +112,7 @@ type DemoBookingCharge = {
 };
 const BOOKING_FIXTURES: DemoBookingFixture[] = [
   {
-    status: 'PENDING',
+    status: BookingStatus.PENDING,
     customer: 0,
     offer: '40000000-0000-4000-8000-000000000001',
     car: null,
@@ -119,9 +120,10 @@ const BOOKING_FIXTURES: DemoBookingFixture[] = [
     ret: 3,
     created: -1,
     option: DEMO_OPTIONS[0],
+    revision: { beforePickup: 1, beforeReturn: 2 },
   },
   {
-    status: 'APPROVED',
+    status: BookingStatus.APPROVED,
     customer: 0,
     offer: '40000000-0000-4000-8000-000000000001',
     car: null,
@@ -131,7 +133,7 @@ const BOOKING_FIXTURES: DemoBookingFixture[] = [
     option: DEMO_OPTIONS[0],
   },
   {
-    status: 'IN_USE',
+    status: BookingStatus.IN_USE,
     customer: 0,
     offer: '40000000-0000-4000-8000-000000000001',
     car: '50000000-0000-4000-8000-000000000001',
@@ -141,7 +143,7 @@ const BOOKING_FIXTURES: DemoBookingFixture[] = [
     option: null,
   },
   {
-    status: 'COMPLETED',
+    status: BookingStatus.COMPLETED,
     customer: 0,
     offer: '40000000-0000-4000-8000-000000000001',
     car: '50000000-0000-4000-8000-000000000001',
@@ -156,7 +158,7 @@ const BOOKING_FIXTURES: DemoBookingFixture[] = [
     ],
   },
   {
-    status: 'PENDING',
+    status: BookingStatus.PENDING,
     customer: 2,
     offer: '40000000-0000-4000-8000-000000000002',
     car: null,
@@ -166,7 +168,7 @@ const BOOKING_FIXTURES: DemoBookingFixture[] = [
     option: DEMO_OPTIONS[1],
   },
   {
-    status: 'CANCELLED',
+    status: BookingStatus.CANCELLED,
     customer: 2,
     offer: '40000000-0000-4000-8000-000000000002',
     car: null,
@@ -177,7 +179,7 @@ const BOOKING_FIXTURES: DemoBookingFixture[] = [
     reason: 'Customer cancelled before pickup',
   },
   {
-    status: 'REJECTED',
+    status: BookingStatus.REJECTED,
     customer: 3,
     offer: '40000000-0000-4000-8000-000000000002',
     car: null,
@@ -188,7 +190,7 @@ const BOOKING_FIXTURES: DemoBookingFixture[] = [
     reason: 'Capacity unavailable at the selected branch',
   },
   {
-    status: 'COMPLETED',
+    status: BookingStatus.COMPLETED,
     customer: 3,
     offer: '40000000-0000-4000-8000-000000000002',
     car: '50000000-0000-4000-8000-000000000009',
@@ -199,7 +201,7 @@ const BOOKING_FIXTURES: DemoBookingFixture[] = [
     option: DEMO_OPTIONS[1],
   },
   {
-    status: 'IN_USE',
+    status: BookingStatus.IN_USE,
     customer: 2,
     offer: '40000000-0000-4000-8000-000000000002',
     car: '50000000-0000-4000-8000-000000000010',
@@ -214,7 +216,7 @@ const BOOKING_FIXTURES: DemoBookingFixture[] = [
     ],
   },
   {
-    status: 'APPROVED',
+    status: BookingStatus.APPROVED,
     customer: 3,
     offer: '40000000-0000-4000-8000-000000000001',
     car: null,
@@ -229,12 +231,12 @@ const at = (offset: number) =>
   new Date(Date.now() + offset * day).toISOString();
 
 const expectedStatuses = [
-  'PENDING',
-  'APPROVED',
-  'IN_USE',
-  'COMPLETED',
-  'CANCELLED',
-  'REJECTED',
+  BookingStatus.PENDING,
+  BookingStatus.APPROVED,
+  BookingStatus.IN_USE,
+  BookingStatus.COMPLETED,
+  BookingStatus.CANCELLED,
+  BookingStatus.REJECTED,
 ];
 if (
   expectedStatuses.some(
@@ -293,6 +295,13 @@ async function seedDemo() {
         .where('b.user_id IN (:...demoIds)', { demoIds })
         .getRawMany<{ id: string }>();
       const oldBookingIds = oldBookings.map(({ id }) => id);
+      if (oldBookingIds.length)
+        await manager
+          .createQueryBuilder()
+          .delete()
+          .from('booking_revision')
+          .where('booking_id IN (:...oldBookingIds)', { oldBookingIds })
+          .execute();
       if (oldBookingIds.length)
         await manager
           .createQueryBuilder()
@@ -439,11 +448,12 @@ async function seedDemo() {
             actual_return_at, ready_at, ready_by, status, currency_code,
             daily_rate_at_booking, hourly_rate_at_booking, charged_days,
             charged_hours, rental_subtotal, options_subtotal, total_amount,
+            paid_amount,
             approved_by, approved_at, rejection_reason, cancellation_reason,
             created_at, updated_at
           ) VALUES (
             $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
-            $18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28
+            $18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29
           )`,
           [
             id,
@@ -457,10 +467,10 @@ async function seedDemo() {
             pickupAt,
             returnAt,
             actualReturnAt,
-            fixture.status === 'COMPLETED' && fixture.actual != null
+            fixture.status === BookingStatus.COMPLETED && fixture.actual != null
               ? at(fixture.actual + 1 / 24)
               : null,
-            fixture.status === 'COMPLETED' ? ADMIN_ID : null,
+            fixture.status === BookingStatus.COMPLETED ? ADMIN_ID : null,
             fixture.status,
             offer.currency,
             offer.daily,
@@ -470,14 +480,27 @@ async function seedDemo() {
             total.rentalSubtotal.amount,
             total.optionsSubtotal.amount,
             total.totalAmount.amount,
-            ['APPROVED', 'IN_USE', 'COMPLETED'].includes(fixture.status)
+            total.totalAmount.amount,
+            [
+              BookingStatus.APPROVED,
+              BookingStatus.IN_USE,
+              BookingStatus.COMPLETED,
+            ].includes(fixture.status)
               ? ADMIN_ID
               : null,
-            ['APPROVED', 'IN_USE', 'COMPLETED'].includes(fixture.status)
+            [
+              BookingStatus.APPROVED,
+              BookingStatus.IN_USE,
+              BookingStatus.COMPLETED,
+            ].includes(fixture.status)
               ? at(fixture.created + 0.01)
               : null,
-            fixture.status === 'REJECTED' ? (fixture.reason ?? null) : null,
-            fixture.status === 'CANCELLED' ? (fixture.reason ?? null) : null,
+            fixture.status === BookingStatus.REJECTED
+              ? (fixture.reason ?? null)
+              : null,
+            fixture.status === BookingStatus.CANCELLED
+              ? (fixture.reason ?? null)
+              : null,
             at(fixture.created),
             at(fixture.created),
           ],
@@ -495,6 +518,60 @@ async function seedDemo() {
               line.totalAmount.amount,
             ],
           );
+        if (fixture.revision) {
+          const options =
+            fixture.option && line
+              ? [
+                  {
+                    carOptionId: fixture.option.id,
+                    name: 'Demo child seat',
+                    quantity: 1,
+                    unitPriceAtBooking: fixture.option.price,
+                    chargedUnits: line.chargedUnits,
+                    totalAmount: line.totalAmount.amount,
+                  },
+                ]
+              : [];
+          const afterState = {
+            status: fixture.status,
+            pickupAt,
+            returnAt,
+            currencyCode: offer.currency,
+            dailyRateAtBooking: offer.daily,
+            hourlyRateAtBooking: offer.hourly,
+            chargedDays: rental.chargedDays,
+            chargedHours: rental.chargedHours,
+            rentalSubtotal: total.rentalSubtotal.amount,
+            optionsSubtotal: total.optionsSubtotal.amount,
+            totalAmount: total.totalAmount.amount,
+            paidAmount: total.totalAmount.amount,
+            approvedBy: null,
+            approvedAt: null,
+            options,
+          };
+          const beforeState = {
+            ...afterState,
+            status: BookingStatus.APPROVED,
+            pickupAt: at(fixture.revision.beforePickup),
+            returnAt: at(fixture.revision.beforeReturn),
+            approvedBy: ADMIN_ID,
+            approvedAt: at(fixture.created + 0.01),
+          };
+          await manager.query(
+            `INSERT INTO booking_revision (
+              id, booking_id, revision_number, changed_by, before_state,
+              after_state, amount_delta, created_at
+            ) VALUES ($1,$2,1,$3,$4::jsonb,$5::jsonb,0,$6)`,
+            [
+              '89000000-0000-4000-8000-000000000001',
+              id,
+              DEMO_USERS[fixture.customer].id,
+              JSON.stringify(beforeState),
+              JSON.stringify(afterState),
+              at(fixture.created + 0.02),
+            ],
+          );
+        }
         for (const charge of fixture.charges ?? [])
           await manager.query(
             `INSERT INTO additional_charge (id, booking_id, type, description, quantity, unit_price, amount, status, created_by)
@@ -524,6 +601,8 @@ async function seedDemo() {
 }
 
 void seedDemo().catch((error: unknown) => {
-  process.stderr.write(`${error instanceof Error ? error.message : error}\n`);
+  process.stderr.write(
+    `${error instanceof Error ? error.message : String(error)}\n`,
+  );
   process.exitCode = 1;
 });

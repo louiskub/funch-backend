@@ -31,7 +31,7 @@ spec:
     spec:
       containers:
         - name: minio
-          image: minio/minio:latest
+          image: docker.io/pgsty/silo:RELEASE.2026-11-12T00-00-00Z
           args:
             - server
             - /data
@@ -95,21 +95,18 @@ spec:
         - name: regcred
       containers:
         - name: init
-          image: minio/mc:latest
+          image: docker.io/pgsty/silo:RELEASE.2026-11-12T00-00-00Z
           command:
             - /bin/sh
             - -c
           args:
             - |
               set -eu
-              until mc alias set local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"; do sleep 3; done
+              curl --fail --silent --show-error --retry 120 --retry-delay 2 --retry-connrefused --retry-max-time 240 http://minio:9000/minio/health/ready >/dev/null
+              mc alias set local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"
               mc mb --ignore-existing "local/$MINIO_BUCKET"
-              cat > /tmp/funch-assets-app.json <<EOF
-              {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:ListBucket"],"Resource":["arn:aws:s3:::$MINIO_BUCKET"]},{"Effect":"Allow","Action":["s3:GetObject","s3:PutObject","s3:DeleteObject"],"Resource":["arn:aws:s3:::$MINIO_BUCKET/*"]}]}
-              EOF
-              cat > /tmp/funch-assets-public.json <<EOF
-              {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":"*","Action":["s3:GetObject"],"Resource":["arn:aws:s3:::$MINIO_BUCKET/public/*"]}]}
-              EOF
+              printf '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:ListBucket"],"Resource":["arn:aws:s3:::%s"]},{"Effect":"Allow","Action":["s3:GetObject","s3:PutObject","s3:DeleteObject"],"Resource":["arn:aws:s3:::%s/*"]}]}\n' "$MINIO_BUCKET" "$MINIO_BUCKET" > /tmp/funch-assets-app.json
+              printf '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":"*","Action":["s3:GetObject"],"Resource":["arn:aws:s3:::%s/public/*"]}]}\n' "$MINIO_BUCKET" > /tmp/funch-assets-public.json
               mc admin policy info local funch-assets-app >/dev/null 2>&1 || mc admin policy create local funch-assets-app /tmp/funch-assets-app.json
               mc admin user info local "$MINIO_ACCESS_KEY" >/dev/null 2>&1 || mc admin user add local "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
               mc admin policy attach local funch-assets-app --user "$MINIO_ACCESS_KEY"

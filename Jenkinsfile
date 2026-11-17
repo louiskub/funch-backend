@@ -98,6 +98,7 @@ pipeline {
                                 sh 'kubectl create secret generic funch-minio-root-env --namespace="$NAMESPACE" --from-env-file="$MINIO_ROOT_ENV_FILE" --dry-run=client -o yaml | kubectl apply -f -'
                                 sh 'kubectl create secret generic funch-minio-app-env --namespace="$NAMESPACE" --from-env-file="$MINIO_APP_ENV_FILE" --dry-run=client -o yaml | kubectl apply -f -'
                                 sh "kubectl apply -f k8s/postgres.yml"
+                                sh 'kubectl delete job funch-minio-init --namespace="$NAMESPACE" --ignore-not-found=true'
                                 sh "kubectl apply -f k8s/minio.yml"
                                 sh "kubectl rollout status statefulset/postgres -n ${NAMESPACE} --timeout=5m"
                                 sh "kubectl rollout status statefulset/minio -n ${NAMESPACE} --timeout=5m"

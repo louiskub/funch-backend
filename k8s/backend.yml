@@ -53,7 +53,7 @@ spec:
   ports:
   - port: 3001
     targetPort: 3001
-    nodePort: 30080
+    nodePort: 30001
   type: NodePort
 
 

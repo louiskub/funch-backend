@@ -147,7 +147,7 @@ export function canCancelBooking(input: CanCancelBookingInput): PolicyDecision {
   if (input.actor.role === 'CUSTOMER') {
     if (input.actor.userId !== input.booking.customerId)
       return decision(false, 'Customers can only cancel their own bookings');
-    if (now >= pickupAt)
+    if (now >= pickupAt && input.booking.status !== 'PENDING')
       return decision(
         false,
         'Customer cancellation must be before pickup time',

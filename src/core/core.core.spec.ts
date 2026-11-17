@@ -664,18 +664,28 @@ describe('canCancelBooking (BL-07)', () => {
   };
 
   it.each<BookingStatus>(['PENDING', 'APPROVED'])(
-    'allows customer cancellation of %s before pickup',
+    'allows customer cancellation of %s at the permitted time',
     (status) => {
+      const now =
+        status === 'PENDING'
+          ? '2026-11-16T10:00:01+07:00'
+          : input.now;
       expect(
-        canCancelBooking({ ...input, booking: { ...input.booking, status } }),
+        canCancelBooking({ ...input, now, booking: { ...input.booking, status } }),
       ).toEqual({ allowed: true, reason: null });
     },
   );
 
   it.each(['2026-11-16T10:00:00+07:00', '2026-11-16T10:00:01+07:00'])(
-    'denies customer cancellation at or after pickup: %s',
+    'denies customer cancellation of approved booking at or after pickup: %s',
     (now) => {
-      expectDenied(canCancelBooking({ ...input, now }));
+      expectDenied(
+        canCancelBooking({
+          ...input,
+          now,
+          booking: { ...input.booking, status: 'APPROVED' },
+        }),
+      );
     },
   );
 
@@ -711,7 +721,13 @@ describe('canCancelBooking (BL-07)', () => {
   });
 
   it('compares pickup and now as instants with different offsets', () => {
-    expectDenied(canCancelBooking({ ...input, now: '2026-11-16T03:00:00Z' }));
+    expectDenied(
+      canCancelBooking({
+        ...input,
+        now: '2026-11-16T03:00:00Z',
+        booking: { ...input.booking, status: 'APPROVED' },
+      }),
+    );
   });
 });
 

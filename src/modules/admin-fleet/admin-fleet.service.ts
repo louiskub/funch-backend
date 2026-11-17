@@ -509,6 +509,7 @@ export class AdminFleetService {
         't.brand AS brand',
         't.model AS model',
         'b.name AS "branchName"',
+        'b.timezone AS timezone',
         'c.vin AS vin',
         'c.license_plate AS "licensePlate"',
         'c.year AS year',
@@ -555,6 +556,8 @@ export class AdminFleetService {
         'u.phone AS "customerPhone"',
         'pb.name AS "pickupBranchName"',
         'rb.name AS "returnBranchName"',
+        'pb.timezone AS "pickupTimezone"',
+        'rb.timezone AS "returnTimezone"',
         'b.created_at AS "createdAt"',
       ])
       .from('booking', 'b')

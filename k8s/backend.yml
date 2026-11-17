@@ -1,0 +1,79 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  namespace: "funch-backend"
+  name: "funch-backend"
+spec:
+  replicas: 1
+  selector: 
+    matchLabels:
+      app: funch-backend
+  template:
+    metadata:
+      labels:
+        app: funch-backend
+    spec:
+      containers:
+      - name: funch-backend
+        image: ghcr.io/louiskub/funch-backend:latest
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        ports:
+        - containerPort: 3001
+        envFrom:
+        - secretRef:
+            name: funch-backend-env
+        readinessProbe:
+          httpGet:
+            path: /api/health
+            port: 3001
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 2
+          failureThreshold: 3
+      imagePullSecrets:
+      - name: regcred
+      nodeSelector:
+        kubernetes.io/hostname: louiskub
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  namespace: funch-backend
+  name: funch-backend-svc
+spec:
+  selector:
+    app: funch-backend
+  ports:
+  - port: 3001
+    targetPort: 3001
+    nodePort: 30080
+  type: NodePort
+
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: funch-backend-hpa
+  namespace: funch-backend
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: funch-backend
+  minReplicas: 1
+  maxReplicas: 2
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 80

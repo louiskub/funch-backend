@@ -1,0 +1,124 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio
+  namespace: funch-backend
+spec:
+  selector:
+    app: minio
+  ports:
+    - name: s3
+      port: 9000
+      targetPort: 9000
+  clusterIP: None
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: minio
+  namespace: funch-backend
+spec:
+  serviceName: minio
+  replicas: 1
+  selector:
+    matchLabels:
+      app: minio
+  template:
+    metadata:
+      labels:
+        app: minio
+    spec:
+      containers:
+        - name: minio
+          image: minio/minio:latest
+          args:
+            - server
+            - /data
+            - --console-address
+            - ":9001"
+          envFrom:
+            - secretRef:
+                name: funch-minio-root-env
+          ports:
+            - name: s3
+              containerPort: 9000
+            - name: console
+              containerPort: 9001
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 1Gi
+          readinessProbe:
+            httpGet:
+              path: /minio/health/ready
+              port: 9000
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /minio/health/live
+              port: 9000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 20Gi
+
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: funch-minio-init
+  namespace: funch-backend
+spec:
+  backoffLimit: 6
+  template:
+    spec:
+      restartPolicy: OnFailure
+      imagePullSecrets:
+        - name: regcred
+      containers:
+        - name: init
+          image: minio/mc:latest
+          command:
+            - /bin/sh
+            - -c
+          args:
+            - |
+              set -eu
+              until mc alias set local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"; do sleep 3; done
+              mc mb --ignore-existing "local/$MINIO_BUCKET"
+              cat > /tmp/funch-assets-app.json <<EOF
+              {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:ListBucket"],"Resource":["arn:aws:s3:::$MINIO_BUCKET"]},{"Effect":"Allow","Action":["s3:GetObject","s3:PutObject","s3:DeleteObject"],"Resource":["arn:aws:s3:::$MINIO_BUCKET/*"]}]}
+              EOF
+              cat > /tmp/funch-assets-public.json <<EOF
+              {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":"*","Action":["s3:GetObject"],"Resource":["arn:aws:s3:::$MINIO_BUCKET/public/*"]}]}
+              EOF
+              mc admin policy info local funch-assets-app >/dev/null 2>&1 || mc admin policy create local funch-assets-app /tmp/funch-assets-app.json
+              mc admin user info local "$MINIO_ACCESS_KEY" >/dev/null 2>&1 || mc admin user add local "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
+              mc admin policy attach local funch-assets-app --user "$MINIO_ACCESS_KEY"
+              mc anonymous set-json /tmp/funch-assets-public.json "local/$MINIO_BUCKET"
+          env:
+            - name: MINIO_BUCKET
+              value: funch-assets
+          envFrom:
+            - secretRef:
+                name: funch-minio-root-env
+            - secretRef:
+                name: funch-minio-app-env

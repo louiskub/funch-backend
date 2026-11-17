@@ -197,7 +197,6 @@ export class BookingsService {
         )
       : [];
     if (
-      supportedOptionIds.length > 0 &&
       [...optionIds].some((optionId) => !supportedOptionIds.includes(optionId))
     ) {
       throw new BadRequestException(
@@ -885,7 +884,8 @@ export class BookingsService {
           this.bookingRepo
             .createQueryBuilder('b')
             .innerJoin('branch', 'br', 'br.id = b.pickup_branch_id')
-            .select('DISTINCT br.id', 'branchId')
+            .distinct(true)
+            .select('br.id', 'branchId')
             .addSelect('br.name', 'branchName')
             .orderBy('br.name')
             .getRawMany<{ branchId: string; branchName: string }>(),

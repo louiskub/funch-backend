@@ -16,15 +16,15 @@ The repeatable seed inserts missing countries, airport branches, car types, offe
 
 ## Booking demo data
 
-Create an isolated PostgreSQL database named `funch_demo`, then run:
+Use the existing local PostgreSQL database named `car-rental`. With the default `.env`, run:
 
 ```sh
-DEMO_DATABASE_URL=postgres://car-rental:car-rental@localhost:15432/funch_demo npm run db:seed-demo
+npm run db:seed-demo
 ```
 
-The command refuses any other database name. It is repeatable and resets only the fixed demo accounts and bookings. It seeds customer and administrator accounts with `demo-customer@example.test` and `demo-admin@example.test`, both using the local-only password `FunchDemo2026!`. Demo bookings span two countries/currencies and include pending, approved, in-use, completed, cancelled, and rejected states; it also seeds one-stock child seats and a confirmed damage charge. Price snapshots are created through the core pricing functions.
+The command refuses non-local hosts and databases other than `car-rental`. It is repeatable and resets the fixed demo bookings, sessions, and options; it updates the fixed demo accounts in place and replaces the seeded Camry and Model 3 galleries with the demo photos. It seeds three customers and one administrator, including a suspended customer, all using the local-only password `FunchDemo2026!` (the suspended account cannot log in). Customer histories cover pending, approved, in-use, return review, completed, cancelled, and rejected bookings across two countries and currencies. Confirmed and pending charges, one-stock child seats, and two public gallery images for each car type are included. The gallery photos are downloaded from Unsplash and their source links are in `assets/demo-cars/SOURCES.md`. Price snapshots are created through the core pricing functions.
 
-Suggested two-session walkthrough: sign in as the customer, quote an offer with a child seat, submit a pending request, and inspect the pending warning; sign in as the administrator, approve a request, assign the matching branch car at pickup, record a return, confirm any additional charge, inspect member history, then open reports filtered to the booking creation dates. The automated booking API suite covers quote and checkout idempotency, owner checks, approval races for the last car and shared option stock, pickup time and no-show handling, cancellation, return charge idempotency, cooldown conflicts, member suspension, and report totals. Run it against the dedicated `funch_booking_test` database with `BOOKING_TEST_DATABASE_URL`.
+Demo logins: `demo-customer@example.test`, `demo-customer-2@example.test`, and `demo-admin@example.test`; password `FunchDemo2026!`. The suspended member is listed as `demo-suspended@example.test` and cannot log in. Suggested two-session walkthrough: open member history for each customer, inspect all booking status filters and the return-review queue, then quote an offer, submit a new pending request, approve it, assign the matching branch car at pickup, record a return, review charges, inspect galleries, and open reports filtered to the booking creation dates.
 
 ## Currency reference data
 
@@ -97,38 +97,7 @@ npm run build
 npm run lint
 ```
 
-The end-to-end suites use isolated databases on the local PostgreSQL service. Catalog and health tests use `funch_ticket02_test`; auth, fleet, options, files, and reference-data tests have their own databases. Create missing databases and run the idempotent setup without dropping existing databases:
-
-```sh
-for db in funch_ticket02_test funch_ticket03_test funch_ticket04_test funch_ticket06_test funch_ticket05_test funch_reference_test; do
-  docker exec -i funch-ticket02-postgres-1 psql -U car-rental -d car-rental -v ON_ERROR_STOP=1 -v db="$db" <<'SQL'
-SELECT format('CREATE DATABASE %I OWNER %I', :'db', 'car-rental')
-WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = :'db') \gexec
-SQL
-  DATABASE_URL="postgres://car-rental:car-rental@localhost:15432/$db" npm run db:setup
-done
-```
-
-Start or refresh only the project's isolated MinIO service and its idempotent bucket/policy initializer (this does not touch PostgreSQL):
-
-```sh
-docker compose -p funch-ticket05 up -d minio minio-init
-```
-
-Run the complete integration suite serially with explicit, isolated database URLs and bucket:
-
-```sh
-DATABASE_URL=postgres://car-rental:car-rental@localhost:15432/funch_ticket02_test \
-AUTH_TEST_DATABASE_URL=postgres://car-rental:car-rental@localhost:15432/funch_ticket03_test \
-ADMIN_TEST_DATABASE_URL=postgres://car-rental:car-rental@localhost:15432/funch_ticket04_test \
-OPTIONS_TEST_DATABASE_URL=postgres://car-rental:car-rental@localhost:15432/funch_ticket06_test \
-FILES_TEST_DATABASE_URL=postgres://car-rental:car-rental@localhost:15432/funch_ticket05_test \
-REFERENCE_TEST_DATABASE_URL=postgres://car-rental:car-rental@localhost:15432/funch_reference_test \
-FILES_TEST_BUCKET=funch-assets-ticket05-test \
-npm run test:e2e -- --runInBand
-```
-
-The two existing Origin-protection assertions remain failing because Origin protection was explicitly excluded from the requested fixes. The guards and these assertions have not been weakened or disabled. Stock, currency, seed-preservation, and the other integration cases pass independently of that known exception.
+End-to-end tests that require PostgreSQL or MinIO have been removed. Unit tests and static checks remain available through the commands above.
 
 ## Production dependency audit
 

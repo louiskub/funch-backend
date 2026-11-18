@@ -1,108 +1,203 @@
-# Calrentar backend
+# Backend ของ Calrentar
 
-NestJS API backed by PostgreSQL and MinIO. Use Node.js 24 or newer (`--env-file-if-exists` is used by the scripts). Install dependencies and start the local database from this directory:
+NestJS API สำหรับแอปเช่ารถ Calrentar ใช้ PostgreSQL เก็บข้อมูลแอป และใช้ MinIO เก็บรูปภาพที่อัปโหลด
+
+[Frontend repository และวิธีทดลองจอง](https://github.com/louiskub/funch-frontend#readme)
+
+## สิ่งที่ต้องมี
+
+- Node.js 24 ขึ้นไป
+- npm
+- Docker Compose
+
+## เริ่มใช้งานในเครื่อง
+
+รันคำสั่งจากโฟลเดอร์หลักของ Backend repository คำสั่ง `docker compose up` จะรอให้ PostgreSQL พร้อมก่อนเริ่มตั้งค่าฐานข้อมูล
 
 ```sh
 npm ci
-docker compose -p funch-ticket02 up -d postgres
 cp .env.example .env
+docker compose up -d --wait postgres
 npm run db:setup
 npm run start:dev
 ```
 
-The compose project uses host port `15432` and a project-scoped volume. The `.env` file is loaded by the start and database scripts; values already exported in the process take precedence. Database migrations are temporarily removed while the Entity model is rebuilt. `db:migrate` is therefore a no-op, and `db:setup` does not create or alter tables. Configure `DATABASE_URL` for another database and set `DATABASE_SSL=true` when the server requires TLS; the default local URL is `postgres://car-rental:car-rental@localhost:15432/car-rental`.
+API เปิดที่ `http://localhost:3001` หน้า Swagger อยู่ที่ `http://localhost:3001/docs` และ OpenAPI JSON อยู่ที่ `http://localhost:3001/docs/json`
 
-The repeatable seed inserts missing countries, airport branches, car types, offers, cars, options, local demo accounts, and bookings in one transaction. It requires a database whose schema already matches the Entities. It preserves existing rows, including country/branch details, gallery order, rates, activation flags, and car status; it is not a reset command. It includes local demo logins (`demo-customer@example.test` and `demo-admin@example.test`, password `FunchDemo2026!`), so use it only with development data.
+เปิด [http://localhost:3001/api/health](http://localhost:3001/api/health) เพื่อตรวจว่า API พร้อมใช้งาน หากต้องการทดลองจองผ่านหน้าเว็บด้วยรายการจองและรูปรถตัวอย่าง ให้ทำต่อที่หัวข้อ [ข้อมูลตัวอย่าง](#ข้อมูลตัวอย่าง)
 
-## Booking demo data
+`db:setup` ใช้ TypeORM migrations ที่มีในโปรเจกต์ แล้วเพิ่มข้อมูลตั้งต้นที่ยังไม่มีลงในฐานข้อมูล คำสั่งนี้ไม่ได้สร้างฐานข้อมูลใหม่ การเชื่อมต่อ PostgreSQL ในเครื่องใช้ค่าเริ่มต้น `postgres://car-rental:car-rental@localhost:15432/car-rental`
 
-Use the existing local PostgreSQL database named `car-rental`. With the default `.env`, run:
+## การตั้งค่า
+
+คัดลอก `.env.example` เป็น `.env` ก่อนรัน API หรือสคริปต์ฐานข้อมูล Node.js จะโหลดค่าจากไฟล์นี้ หากตั้งค่าตัวแปรไว้ใน shell แล้ว ค่านั้นจะมีลำดับความสำคัญสูงกว่า
+
+| ตัวแปร | ใช้สำหรับ | ค่าเริ่มต้น |
+| --- | --- | --- |
+| `PORT` | พอร์ตของ API | `3001` |
+| `DATABASE_URL` | URL สำหรับเชื่อมต่อ PostgreSQL | ฐานข้อมูล `car-rental` ในเครื่อง พอร์ต `15432` |
+| `DATABASE_SSL` | เปิดใช้ TLS สำหรับ PostgreSQL | `false` |
+| `FRONTEND_ORIGIN` | origin ที่อนุญาตสำหรับ CORS พร้อม credentials | `http://localhost:3000` |
+| `MINIO_ENDPOINT` | endpoint ของ MinIO ที่ API ใช้ | `http://localhost:19000` |
+| `MINIO_PUBLIC_ENDPOINT` | endpoint ที่ browser ใช้เปิดรูปสาธารณะ | `http://localhost:19000` |
+| `MINIO_BUCKET` | ชื่อ bucket สำหรับเก็บไฟล์ | `funch-assets` |
+| `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` | ข้อมูลเข้าสู่ระบบ MinIO ของแอป | ค่าสำหรับพัฒนาในเครื่อง |
+| `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` | ข้อมูลเข้าสู่ระบบ MinIO สำหรับตัวเริ่มต้นระบบ | ค่าสำหรับพัฒนาในเครื่อง |
+
+ตั้งรหัสผ่านเฉพาะและใช้ฐานข้อมูลส่วนตัวสำหรับสภาพแวดล้อมที่ใช้ร่วมกันหรือระบบที่ deploy แล้ว ตั้ง `DATABASE_SSL=true` เพื่อเปิด TLS ตามการตั้งค่าการเชื่อมต่อ PostgreSQL ปัจจุบัน
+
+## ข้อมูลตัวอย่าง
+
+คำสั่ง seed ปกติจะเพิ่มประเทศ สาขา รถ ข้อเสนอเช่ารถ options บัญชีตัวอย่างในเครื่อง และ bookings ที่ยังไม่มี โดยเก็บข้อมูลเดิมไว้และรันซ้ำได้:
 
 ```sh
+npm run db:seed
+```
+
+หากต้องการทดลองจองและอนุมัติผ่านหน้าเว็บ ให้เปิด Terminal อีกหน้าต่างในโฟลเดอร์หลักของ Backend repository แล้วรันคำสั่งทีละบรรทัด รอให้ `minio-init` สร้าง bucket และตั้งค่าสิทธิ์เสร็จก่อนรัน `db:seed-demo`
+
+```sh
+docker compose up -d --wait minio
+docker compose run --rm minio-init
 npm run db:seed-demo
 ```
 
-The command refuses non-local hosts and databases other than `car-rental`. It is repeatable and resets the fixed demo bookings, sessions, and options; it updates the fixed demo accounts in place and replaces the seeded Camry and Model 3 galleries with the demo photos. It seeds three customers and one administrator, including a suspended customer, all using the local-only password `FunchDemo2026!` (the suspended account cannot log in). Customer histories cover pending, approved, in-use, return review, completed, cancelled, and rejected bookings across two countries and currencies. Confirmed and pending charges, one-stock child seats, and two public gallery images for each car type are included. The gallery photos are downloaded from Unsplash and their source links are in `assets/demo-cars/SOURCES.md`. Price snapshots are created through the core pricing functions.
+`db:seed-demo` ใช้ได้กับฐานข้อมูล `car-rental` บนเครื่องนี้เท่านั้น คำสั่งจะปฏิเสธ host หรือชื่อฐานข้อมูลอื่น โดยจะรีเซ็ต bookings, sessions และ options ของ demo ที่กำหนดไว้ อัปเดตบัญชี demo เหล่านั้น และแทนที่แกลเลอรีรูปรถ Camry กับ Model 3 ที่ seed ไว้ อย่ารันกับ production หรือฐานข้อมูลที่มีข้อมูลที่ต้องการเก็บไว้
 
-Demo logins: `demo-customer@example.test`, `demo-customer-2@example.test`, and `demo-admin@example.test`; password `FunchDemo2026!`. The suspended member is listed as `demo-suspended@example.test` and cannot log in. Suggested two-session walkthrough: open member history for each customer, inspect all booking status filters and the return-review queue, then quote an offer, submit a new pending request, approve it, assign the matching branch car at pickup, record a return, review charges, inspect galleries, and open reports filtered to the booking creation dates.
+บัญชี demo ใช้รหัสผ่าน `FunchDemo2026!`:
 
-## Currency reference data
+- ลูกค้า: `demo-customer@example.test`
+- ลูกค้า: `demo-customer-2@example.test`
+- แอดมิน: `demo-admin@example.test`
+- ลูกค้าที่ถูกระงับ: `demo-suspended@example.test` (เข้าสู่ระบบไม่ได้)
 
-`Currency` lives in `src/modules/catalog/entities/currency.entity.ts`. Its primary key is `code`, with `name` and `minorUnits` mapped to `minor_units`. Its current reference data includes THB, USD, JPY, SGD, MYR, KRW, AUD, GBP, CAD, and AED. Unknown offer currencies return `400` on create or update. Minor-unit metadata does not change rental calculations or rounding.
+ข้อมูลตัวอย่างครอบคลุมสถานะ booking ได้แก่ pending, approved, in-use, return-review, completed, cancelled และ rejected รวมถึง charges, options และแกลเลอรีรูปภาพ รูปตัวอย่างและลิงก์ที่มาของรูปอยู่ใน `assets/demo-cars/`
 
-No Currency CRUD API or UI is included. Schema migrations are temporarily removed while the Entity model is rebuilt; regenerate them before setting up or upgrading a database.
+## ภาพรวม API
 
-## HTTP bootstrap and API documentation
+ทุก route ของ API ใช้ prefix `/api` รูปแบบ response คือ `{ "status": { "code": 200, "messages": "..." }, "data": ... }` ส่วน error จะมี `data: null`
 
-The API keeps the `/api` prefix. Swagger UI is available at `/docs`, with the OpenAPI document at `/docs/json`. The document uses the title `Calrentar API` and describes session-cookie authentication through `funch_session`. The Swagger compiler plugin derives request schemas from the DTOs. JSON is served over HTTP without writing a file at startup.
+| ส่วนงาน | Routes |
+| --- | --- |
+| Health check | `GET /api/health` |
+| Catalog | `GET /api/countries`, `GET /api/countries/:countryCode/branches`, `GET /api/branches/:branchId/offers`, `GET /api/offers/:offerId` |
+| การยืนยันตัวตนและโปรไฟล์ | `POST /api/auth/register`, `POST /api/auth/login`, `POST /api/auth/logout`, `GET /api/auth/me`, `PATCH /api/auth/me` |
+| Bookings | Routes สำหรับคำนวณราคา checkout ประวัติ booking ของลูกค้า และจัดการวงจร booking โดยแอดมิน |
+| Fleet, options, files และ reports | ดู routes สำหรับแอดมินทั้งหมดได้ใน Swagger |
 
-Helmet sets the HTTP security headers. CORS allows the configured `FRONTEND_ORIGIN` with credentials. Swagger uses an existing browser session; its authorization control cannot set an HttpOnly cookie.
+เปิดหน้า Swagger UI ที่ `http://localhost:3001/docs` เพื่อดู schema ของ request, parameters และ routes ทั้งหมด
 
-`AppModule` registers one global validation pipe, response interceptor, and exception filter. Validation transforms DTOs, rejects undeclared fields, and keeps declared validated fields. Controllers do not register duplicate pipes. `common/` contains shared classes without a `CommonModule`.
+## ภาพรวมการทำงานของระบบ
 
-Both success and error responses use `{ status: { code, messages }, data }`. Errors have `data: null`, and validation messages are joined into `status.messages`. Server errors return `Internal server error` while their diagnostic details stay in server logs. The frontend reads error messages and preserves the HTTP status in `ApiError`.
+เส้นทางหลักของ request เป็นดังนี้:
 
-## File storage
-
-Start only this project's isolated MinIO services (the command does not start or modify PostgreSQL):
-
-```sh
-docker compose -p funch-ticket05 up -d minio minio-init
+```text
+Browser → NestJS Controller → Guard และ DTO validation → Service → PostgreSQL
+                                                           ↘ Core business rules
+FilesService → StorageService → MinIO
 ```
 
-MinIO listens on `19000` (S3 API) and `19001` (console), stores data in the `funch-ticket05_funch-minio-data` volume, and creates the `funch-assets` bucket. The app uses a bucket-scoped service account from `.env`; the bucket policy grants anonymous `GetObject` only for `public/*`. Root credentials are only used by the one-shot initializer. Never use `docker compose down -v` against a shared project.
+Controller กำหนด HTTP routes และตรวจสิทธิ์ ส่วน service ประสานงานกับฐานข้อมูลและระบบอื่น กฎคำนวณที่ไม่ต้องพึ่ง NestJS หรือฐานข้อมูลอยู่ใน `src/core/` เช่น การคิดราคา การตรวจช่วงเวลาว่าง และการคำนวณเวลาที่รถพร้อมให้เช่าครั้งถัดไป
 
-The credentials in `.env.example` are local development values; set unique secrets for any shared or deployed MinIO instance.
+การจองทำงานตามลำดับนี้:
 
-Set `MINIO_ENDPOINT` to the backend's service endpoint and `MINIO_PUBLIC_ENDPOINT` to the browser-reachable endpoint. Local defaults use `http://localhost:19000` for both. Public upload is `POST /api/admin/files?visibility=PUBLIC` (multipart field `file`); private image upload is the same endpoint with `visibility=PRIVATE`. Both require an active admin session. Gallery order is saved with `POST /api/admin/fleet/car-types/:id/images` and `{ "imageFileIds": ["...", "..."] }`. `GET /api/admin/files` returns public files for selection. `GET /api/offers/:id` includes ordered `images` with direct public URLs. Admin private downloads use `GET /api/admin/files/:id/signed-get`; the response is no-store and the URL expires in 300 seconds. No private document UI is included.
+1. `POST /api/bookings/quote` คำนวณราคาและตรวจจำนวนรถกับ options ที่ว่างในช่วงเวลาที่เลือก
+2. `POST /api/bookings` สร้าง booking สำหรับลูกค้าที่เข้าสู่ระบบ ส่วน `POST /api/bookings/register-checkout` รองรับการสมัครบัญชีและจองในคำขอเดียว
+3. API คำนวณราคาและตรวจ availability ซ้ำภายใน transaction ก่อนบันทึก booking สถานะเริ่มต้นเป็น `PENDING`
+4. แอดมินอนุมัติคำขอได้เมื่อรถและ options ยังมีจำนวนเพียงพอ ระบบเลือกตัวรถจริงในขั้นตอนรับรถ
+5. ตอนรับรถ ระบบเปลี่ยนสถานะเป็น `IN_USE` หลังตรวจว่ารถอยู่ในสาขาและประเภทรถที่ถูกต้อง ใช้งานได้ ไม่ได้ถูกเช่าอยู่ และพ้นช่วงพักรถแล้ว
+6. ตอนคืนรถ ระบบบันทึกเวลาคืนจริง คำนวณค่าเช่าหรือ options ที่เกินเวลา และเพิ่ม charge อื่น เช่น ค่าเสียหาย ให้แอดมินตรวจ
+7. ระบบเปลี่ยน booking เป็น `COMPLETED` หลังบันทึกการคืนรถและจัดการ charge ที่ยังรอพิจารณาทั้งหมดแล้ว
 
-If a metadata insert fails after MinIO accepts an upload, the API attempts immediate object removal. The scoped retry command removes only objects absent from `file_asset` and at least 24 hours old:
+Checkout ในโปรเจกต์เป็น mock flow ไม่มีการเชื่อมต่อ payment gateway หรือหักเงินจริง ระบบบันทึก `paidAmount` ตามยอด booking เพื่อใช้ทดสอบ workflow เท่านั้น
+
+## การตัดสินใจในการออกแบบ
+
+- **แยกการคำนวณจาก framework:** ฟังก์ชันใน `src/core/` รับข้อมูลและคืนผลลัพธ์โดยตรง จึงใช้กฎเดียวกันจากหลายขั้นตอนและทดสอบได้โดยไม่ต้องเปิด API หรือฐานข้อมูล
+- **เสนอราคาก่อน แต่คำนวณซ้ำตอนยืนยัน:** quote ใช้แสดงราคาให้ลูกค้า ส่วน checkout คำนวณใหม่และตรวจราคา/availability อีกครั้ง ป้องกันการใช้ quote เก่าหลังราคาหรือจำนวนรถเปลี่ยน
+- **ป้องกัน checkout ซ้ำ:** แต่ละ checkout มี `checkoutKey` ที่ไม่ซ้ำกัน การส่ง key เดิมซ้ำจะคืน booking เดิม แทนการสร้างรายการใหม่
+- **เก็บ snapshot ของราคา:** booking เก็บ rate, currency และราคาของ options ณ เวลาจอง การแก้ราคาใน offer ภายหลังจึงไม่เปลี่ยนยอดของ booking เก่า
+- **คิด availability จากช่วงเวลาที่ทับซ้อน:** ระบบหาจำนวนรถหรือ options ที่ถูกจองพร้อมกันสูงสุดในช่วงที่ขอ แทนการนับรายการจองทั้งหมด รถยังถูกกันไว้จนถึงเวลาพร้อมใช้งานครั้งถัดไป
+- **บันทึกการแก้ booking เป็น revision:** การแก้วันหรือ options จะคำนวณยอดใหม่ ตรวจ revision และ quote ที่ลูกค้ายืนยันก่อนบันทึก พร้อมเก็บสถานะก่อนและหลังการแก้
+
+## หลักการคิดราคา
+
+การคำนวณหลักอยู่ใน [`src/core/pricing.core.ts`](src/core/pricing.core.ts) และใช้ค่าเงินของ offer ที่สาขานั้นกำหนด ราคาทุกส่วนใน booking ต้องใช้ currency เดียวกัน
+
+### ค่าเช่ารถ
+
+ระบบคิดจากเวลาที่ผ่านไปจริง ไม่ได้นับตามวันปฏิทิน:
+
+1. นับทุก 24 ชั่วโมงเต็มเป็นหนึ่งวัน
+2. ปัดเศษเวลาที่เหลือขึ้นเป็นชั่วโมง
+3. ถ้าเวลาที่เหลือมากกว่า 8 ชั่วโมง หรือเวลาคืนตามเขตเวลาสาขาเลย 14:00 น. ให้คิดเศษนั้นเป็นอีกหนึ่งวัน
+4. ถ้ายังคิดเป็นชั่วโมง แต่ค่าเช่ารายชั่วโมงรวมสูงกว่ารายวัน ให้เปลี่ยนชั่วโมงส่วนนั้นเป็นหนึ่งวัน
+5. รวม `จำนวนวัน × daily rate` กับ `จำนวนชั่วโมง × hourly rate`
+
+ตัวอย่าง: daily rate 1,000 บาท และ hourly rate 150 บาท หากเช่า 26 ชั่วโมงและเวลาคืนในสาขาเป็น 12:00 น. ระบบคิด 1 วันกับ 2 ชั่วโมง รวม 1,300 บาท หากเวลาคืนเป็น 15:00 น. เศษเวลาจะถูกคิดเป็นอีกหนึ่งวัน รวม 2,000 บาท
+
+### Options
+
+ราคาของแต่ละ option ใช้วิธีตาม `pricingType`:
+
+| ประเภท | วิธีคิด |
+| --- | --- |
+| `FIXED` | ราคา × 1 ต่อ booking |
+| `PER_DAY` | ราคา × จำนวนวันที่ปัดขึ้นจากชั่วโมงเช่าจริง |
+| `PER_UNIT_PER_DAY` | ราคา × จำนวนวัน × จำนวนที่เลือก |
+
+จำนวนวันของ options ใช้ `ceil(ระยะเวลาเป็นชั่วโมง ÷ 24)` ซึ่งแยกจากกติกาปัดเศษค่าเช่ารถ
+
+### ยอดรวมและค่าใช้จ่ายหลังจอง
+
+`totalAmount` เท่ากับค่าเช่ารถรวมกับ options ไม่มีภาษีหรือค่าธรรมเนียมอื่นในสูตรนี้ จำนวนเงินใช้ decimal arithmetic แทน floating point และระบบไม่ปัดตามจำนวนหลักย่อยของ currency metadata
+
+เมื่อคืนรถช้ากว่าเวลาที่จอง ระบบคำนวณค่าเช่าใหม่ถึงเวลาคืนจริง แล้วเพิ่มเฉพาะส่วนต่างที่สูงกว่ายอดค่าเช่าที่จองไว้ Options แบบรายวันจะคิดเพิ่มตามจำนวนวันที่เกิน ส่วน option แบบ `FIXED` จะไม่ถูกคิดซ้ำ ค่าใช้จ่ายส่วนนี้ถูกบันทึกเป็น charge เพิ่มเติม ส่วน fuel, damage และ other charges จะรอแอดมินยืนยันหรือยกเว้นก่อนปิด booking
+
+การคำนวณราคาและยอดแก้ booking ดูได้ที่ [`src/core/pricing.core.ts`](src/core/pricing.core.ts) และ [`src/core/booking-edit.core.ts`](src/core/booking-edit.core.ts) กฎเวลาพร้อมใช้งานและจำนวนรถว่างอยู่ใน [`src/core/policy.core.ts`](src/core/policy.core.ts)
+
+## การเก็บไฟล์
+
+Compose เปิด MinIO ที่พอร์ต `19000` สำหรับ S3 API และพอร์ต `19001` สำหรับ console บริการ `minio-init` สร้าง bucket, บัญชีแอปที่มีสิทธิ์จำกัด และ policy ที่อนุญาตให้อ่านไฟล์สาธารณะใน path `public/`
+
+ตั้ง `MINIO_ENDPOINT` เป็น address ที่ backend เข้าถึงได้ และตั้ง `MINIO_PUBLIC_ENDPOINT` เป็น address ที่ browser เข้าถึงได้ API ส่ง URL ของรูปสาธารณะกลับมาพร้อมรายละเอียดข้อเสนอเช่ารถ การอัปโหลดไฟล์และดาวน์โหลดไฟล์ส่วนตัวต้องใช้ session ของแอดมินที่ยังใช้งานได้
+
+ลบ object ที่ไม่มีข้อมูลในฐานข้อมูลอ้างถึงและมีอายุอย่างน้อย 24 ชั่วโมงได้ด้วยคำสั่งนี้:
 
 ```sh
 npm run files:cleanup-orphans
 ```
 
-## Public catalog API
-
-- `GET /api/health` → `{ "status": { "code": 200, "messages": "OK" }, "data": { "status": "ok" } }`
-- `GET /api/countries` → countries that have at least one active branch and active car offer
-- `GET /api/countries/:countryCode/branches` → active branches in that country with an active offer
-- `GET /api/branches/:branchId/offers` → active offers at that branch
-- `GET /api/offers/:offerId` → active offer details, or `404`
-
-Catalog responses include branch timezone and currency. Monetary numeric columns are serialized as exact decimal strings. Invalid UUID path parameters return `400`. Catalog endpoints filter inactive offers, car types, and branches through their relations.
-
-## Customer authentication
-
-- `POST /api/auth/register` accepts `name`, `email`, `password`, and `phone`; it creates an active `CUSTOMER` account and starts a session.
-- `POST /api/auth/login` and `POST /api/auth/logout` create and revoke sessions.
-- `GET /api/auth/me` and `PATCH /api/auth/me` read and update the current account profile. Profile fields are `name`, `email`, and `phone`.
-- Sessions use opaque `funch_session` HttpOnly, SameSite=Lax cookies. Protected requests load the current role and suspension state from PostgreSQL.
-- Browser state changes require the configured exact `FRONTEND_ORIGIN`; configure `FRONTEND_ORIGIN` and `DATABASE_URL` for deployment.
-- For later protected routes, compose `SessionAuthGuard` with `RoleGuard` and declare staff access with `@Roles(UserRole.ADMIN)`.
-
-Provision a demo admin only after preparing a database schema that matches the Entities. The command requires explicit credentials and can promote/reset an account with the matching email:
+## คำสั่งสำหรับพัฒนา
 
 ```sh
-ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD='use-a-private-12-plus-character-password' ADMIN_NAME='Demo Admin' ADMIN_PHONE='+66123456789' npm run admin:provision
+npm run start:dev       # เริ่ม API และเฝ้าดูการเปลี่ยนแปลงไฟล์
+npm run build           # คอมไพล์ API
+npm run lint            # รัน ESLint
+npm test -- --runInBand # รัน unit tests
+npm run test:cov        # รัน unit tests พร้อม coverage
 ```
 
-## Tests
-
-Unit tests and static checks:
+คำสั่งเกี่ยวกับฐานข้อมูล:
 
 ```sh
-npm test -- --runInBand
-npm run build
-npm run lint
+npm run db:migrate      # ใช้ migrations ที่ยังไม่ถูกรัน
+npm run db:seed         # เพิ่มข้อมูลตั้งต้นที่ยังไม่มี
+npm run db:setup        # ใช้ migrations แล้ว seed ข้อมูล
+npm run db:seed-demo    # รีเซ็ตข้อมูล demo ที่กำหนดไว้ในเครื่อง
 ```
 
-End-to-end tests that require PostgreSQL or MinIO have been removed. Unit tests and static checks remain available through the commands above.
+สร้างบัญชีแอดมินโดยกำหนด `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `ADMIN_NAME` และ `ADMIN_PHONE` ใน environment ก่อนรัน `npm run admin:provision`
 
-## Production dependency audit
+## โครงสร้างโปรเจกต์
 
-The 2026-11-15 production audit reports seven package findings: four through MinIO, described below, and three through the existing TypeORM `glob`/`minimatch` chain. The bootstrap changes do not resolve those existing dependency findings.
+```text
+src/
+  common/       HTTP filters, interceptors และ middleware
+  core/         กฎธุรกิจที่ใช้ร่วมกัน และ helper สำหรับ decimal/time แบบแม่นยำ
+  modules/      Catalog, authentication, bookings, fleet, files และ options
+  platform/     Configuration, database, health checks และ storage adapters
+scripts/        คำสั่งจัดการฐานข้อมูล บัญชีแอดมิน และไฟล์ที่ไม่มีข้อมูลอ้างถึง
+```
 
-As of 2026-11-14, `npm audit --omit=dev` reports four package findings through MinIO 8.0.7: `query-string@7.1.3` resolves `decode-uri-component@0.2.2` (including [GHSA-qr28-fpjm-wq7f](https://github.com/advisories/GHSA-qr28-fpjm-wq7f)), and MinIO also includes `stream-json@1.9.1` (including [GHSA-528h-pc64-c93x](https://github.com/advisories/GHSA-528h-pc64-c93x), [GHSA-hqr4-qq8f-hg3x](https://github.com/advisories/GHSA-hqr4-qq8f-hg3x), and [GHSA-mjw6-4jj6-33hc](https://github.com/uhop/stream-json/security/advisories/GHSA-mjw6-4jj6-33hc)). The registry currently lists 8.0.7 as the latest MinIO release, and it still declares both dependency ranges. npm's suggested MinIO 7.1.3 major downgrade still depends on `query-string@7`; it does not resolve the decoder finding. The patched decoder and stream-json releases are ESM packages while these MinIO/query-string call sites load through CommonJS. This project does not apply those cross-major overrides or the SDK downgrade without a supported upstream release and MinIO integration coverage.
-
-The affected parser paths are not called by the app today: MinIO uses `query-string.stringify` for its request and signing parameters, not `parse`; its streaming JSON parser is used by bucket notification listeners. The app only uses MinIO object upload, removal, presigned download, and orphan listing, and does not configure or call bucket notifications. Keep the audit finding visible and recheck it when upgrading MinIO or adding notification handling; this reachability assessment does not make `npm audit` clean.
+แต่ละ feature module มี controller และ service ของตัวเอง ไฟล์ประกอบ เช่น DTOs, entities, guards และ enums อยู่ในโฟลเดอร์ย่อยของ module นั้น

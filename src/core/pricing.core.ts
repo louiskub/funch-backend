@@ -49,20 +49,21 @@ export function calculateRentalPrice(
     throw new RangeError('Rental rates must be greater than zero');
 
   const elapsed = durationMillis(pickupAt, returnAt);
-  const returnInstant = parseIsoInstant(returnAt);
-  const localReturn = returnInstant.setZone(branchTimeZone);
-  if (!localReturn.isValid)
+  const localPickup = parseIsoInstant(pickupAt).setZone(branchTimeZone);
+  const localReturn = parseIsoInstant(returnAt).setZone(branchTimeZone);
+  if (!localPickup.isValid || !localReturn.isValid)
     throw new TypeError(`Invalid branch timezone: ${branchTimeZone}`);
 
   let days = Math.floor(elapsed / DAY_MS);
   const remainder = elapsed - days * DAY_MS;
   let hours = Math.ceil(remainder / HOUR_MS);
-  const afterCutoff =
-    localReturn.hour > 14 ||
-    (localReturn.hour === 14 &&
-      (localReturn.minute > 0 ||
-        localReturn.second > 0 ||
-        localReturn.millisecond > 0));
+
+  const afterCutoff = [localPickup, localReturn].some(
+    (dt) =>
+      dt.hour > 14 ||
+      (dt.hour === 14 &&
+        (dt.minute > 0 || dt.second > 0 || dt.millisecond > 0)),
+  );
 
   if (remainder > 0 && (remainder > 8 * HOUR_MS || afterCutoff)) {
     days += 1;

@@ -64,7 +64,7 @@ describe('calculateRentalPrice (BL-01)', () => {
     ['after local cutoff', '16T11:00:00', '16T14:30:00', 1, 0, '1000'],
     ['one second after cutoff', '16T13:00:00', '16T14:00:01', 1, 0, '1000'],
     ['short evening rental', '16T22:00:00', '16T23:00:00', 1, 0, '1000'],
-    ['overnight before cutoff', '16T22:00:00', '17T02:00:00', 0, 4, '400'],
+    ['overnight with pickup after cutoff', '16T22:00:00', '17T02:00:00', 1, 0, '1000'],
     ['rounding an extra minute', '16T08:00:00', '16T09:01:00', 0, 2, '200'],
     ['rounding an extra second', '16T08:00:00', '16T09:00:01', 0, 2, '200'],
     ['one exact hour', '16T08:00:00', '16T09:00:00', 0, 1, '100'],
